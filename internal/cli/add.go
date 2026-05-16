@@ -71,7 +71,7 @@ func newAddCommand(opts *Options) *cobra.Command {
 			}
 			return output.Render(cmd.OutOrStdout(), opts.JSON, results, func() {
 				for _, result := range results {
-					fmt.Fprintf(cmd.OutOrStdout(), "added and installed %s\n", result.Name)
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "added and installed %s\n", result.Name)
 				}
 			})
 		},

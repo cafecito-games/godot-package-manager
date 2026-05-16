@@ -76,7 +76,7 @@ func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Mani
 		if useLock {
 			entry := lock.Addons[spec.Name]
 			if entry.Checksum != "" && fetched.Checksum != "" && entry.Checksum != fetched.Checksum {
-				os.RemoveAll(fetched.Dir)
+				_ = os.RemoveAll(fetched.Dir)
 				return nil, &output.FetchError{Err: fmt.Errorf(
 					"addon %q: checksum mismatch (lock: %s, fetched: %s)",
 					spec.Name, entry.Checksum, fetched.Checksum,
@@ -85,7 +85,7 @@ func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Mani
 		}
 
 		err = installer.Install(fetched, spec, r.AddonsDir)
-		os.RemoveAll(fetched.Dir)
+		_ = os.RemoveAll(fetched.Dir)
 		if err != nil {
 			return nil, err
 		}

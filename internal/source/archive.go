@@ -35,7 +35,7 @@ func (f *ArchiveFetcher) Fetch(ctx context.Context, spec manifest.AddonSpec) (Fe
 		return FetchResult{}, &output.FetchError{Err: err}
 	}
 	if err := extractArchive(spec.URL, data, dir); err != nil {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		return FetchResult{}, err
 	}
 	sum := sha256.Sum256(data)
@@ -63,7 +63,7 @@ func download(ctx context.Context, url string, header http.Header) ([]byte, erro
 	if err != nil {
 		return nil, &output.FetchError{Err: fmt.Errorf("downloading %s: %w", url, err)}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, &output.FetchError{Err: fmt.Errorf("downloading %s: HTTP %d", url, resp.StatusCode)}
 	}
@@ -111,7 +111,7 @@ func extractZip(data []byte, dir string) error {
 			return &output.InstallError{Err: err}
 		}
 		err = writeFile(dest, readCloser, zipFile.Mode())
-		readCloser.Close()
+		_ = readCloser.Close()
 		if err != nil {
 			return err
 		}
@@ -124,7 +124,7 @@ func extractTarGz(data []byte, dir string) error {
 	if err != nil {
 		return &output.InstallError{Err: err}
 	}
-	defer gzipReader.Close()
+	defer func() { _ = gzipReader.Close() }()
 	tarReader := tar.NewReader(gzipReader)
 	for {
 		header, err := tarReader.Next()
@@ -169,7 +169,7 @@ func writeFile(dest string, reader io.Reader, mode os.FileMode) error {
 	if err != nil {
 		return &output.InstallError{Err: err}
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 	if _, err := io.Copy(out, reader); err != nil {
 		return &output.InstallError{Err: err}
 	}

@@ -39,21 +39,21 @@ func (m *Manifest) Save(path string) error {
 	tmpName := tmp.Name()
 
 	if err := toml.NewEncoder(tmp).Encode(m); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("encoding manifest %s: %w", path, err)
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("syncing manifest %s: %w", path, err)
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("closing manifest %s: %w", path, err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("installing manifest %s: %w", path, err)
 	}
 	return nil

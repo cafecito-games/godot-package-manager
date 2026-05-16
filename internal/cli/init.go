@@ -46,7 +46,7 @@ func newInitCommand(opts *Options) *cobra.Command {
 			if err := os.WriteFile(path, []byte(starterManifest), 0o644); err != nil {
 				return &output.ManifestError{Err: err}
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Created %s\n", path)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Created %s\n", path)
 			return nil
 		},
 	}

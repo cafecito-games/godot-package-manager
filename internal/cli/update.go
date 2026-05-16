@@ -30,7 +30,7 @@ func newUpdateCommand(opts *Options) *cobra.Command {
 			}
 			return output.Render(cmd.OutOrStdout(), opts.JSON, results, func() {
 				for _, result := range results {
-					fmt.Fprintf(cmd.OutOrStdout(), "updated %s @ %s\n", result.Name, result.ResolvedVersion)
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "updated %s @ %s\n", result.Name, result.ResolvedVersion)
 				}
 			})
 		},
