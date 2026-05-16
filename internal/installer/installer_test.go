@@ -84,3 +84,67 @@ func TestInstallReplacesStaleFiles(t *testing.T) {
 	_, err := os.Stat(stale)
 	require.True(t, os.IsNotExist(err))
 }
+
+func TestInstallRejectsEscapingInstallName(t *testing.T) {
+	// Place a sentinel file in the parent of addonsDir to verify it survives.
+	projectDir := t.TempDir()
+	addonsDir := filepath.Join(projectDir, "addons")
+	require.NoError(t, os.MkdirAll(addonsDir, 0o755))
+	sentinelPath := filepath.Join(projectDir, "project.godot")
+	require.NoError(t, os.WriteFile(sentinelPath, []byte("sentinel"), 0o644))
+
+	fetched := t.TempDir()
+	writeTree(t, fetched, map[string]string{"plugin.cfg": "x"})
+
+	spec := manifest.AddonSpec{Name: "dlg", InstallAs: ".."}
+	err := Install(source.FetchResult{Dir: fetched}, spec, addonsDir)
+	require.Error(t, err)
+	var installErr *output.InstallError
+	require.ErrorAs(t, err, &installErr)
+
+	// Sentinel must still exist — the parent directory must not have been deleted.
+	_, statErr := os.Stat(sentinelPath)
+	require.NoError(t, statErr, "sentinel file was deleted; Install escaped addonsDir")
+}
+
+func TestInstallRollbackOnCopyFailure(t *testing.T) {
+	addonsDir := t.TempDir()
+
+	// First install: put a known file in place.
+	firstFetched := t.TempDir()
+	writeTree(t, firstFetched, map[string]string{"plugin.cfg": "original"})
+	require.NoError(t, Install(source.FetchResult{Dir: firstFetched}, manifest.AddonSpec{Name: "dlg"}, addonsDir))
+	originalFile := filepath.Join(addonsDir, "dlg", "plugin.cfg")
+	content, err := os.ReadFile(originalFile)
+	require.NoError(t, err)
+	require.Equal(t, "original", string(content))
+
+	// Second install: fetched tree contains a symlink, which copyTree must reject.
+	badFetched := t.TempDir()
+	writeTree(t, badFetched, map[string]string{"plugin.cfg": "new"})
+	symlinkPath := filepath.Join(badFetched, "evil_link")
+	require.NoError(t, os.Symlink("/etc/passwd", symlinkPath))
+
+	err = Install(source.FetchResult{Dir: badFetched}, manifest.AddonSpec{Name: "dlg"}, addonsDir)
+	require.Error(t, err)
+	var installErr *output.InstallError
+	require.ErrorAs(t, err, &installErr)
+
+	// Original addon must still be present (rollback worked).
+	content, err = os.ReadFile(originalFile)
+	require.NoError(t, err)
+	require.Equal(t, "original", string(content), "rollback failed: original file was lost")
+}
+
+func TestInstallRejectsSymlink(t *testing.T) {
+	addonsDir := t.TempDir()
+	fetched := t.TempDir()
+	writeTree(t, fetched, map[string]string{"plugin.cfg": "x"})
+	symlinkPath := filepath.Join(fetched, "link_to_secret")
+	require.NoError(t, os.Symlink("/etc/passwd", symlinkPath))
+
+	err := Install(source.FetchResult{Dir: fetched}, manifest.AddonSpec{Name: "dlg"}, addonsDir)
+	require.Error(t, err)
+	var installErr *output.InstallError
+	require.ErrorAs(t, err, &installErr)
+}
