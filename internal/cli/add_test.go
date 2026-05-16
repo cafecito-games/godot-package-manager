@@ -44,6 +44,19 @@ func TestAddRejectsDuplicate(t *testing.T) {
 	require.ErrorAs(t, err, &usageErr)
 }
 
+func TestAddNoFlagsInvokesTUI(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "project.godot"), nil, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "addons.toml"), []byte("[addons]\n"), 0o644))
+
+	cmd := newAddCommand(&Options{})
+	cmd.SetArgs([]string{"--dir", dir})
+	err := cmd.Execute()
+	require.Error(t, err)
+	var usageErr *UsageError
+	require.ErrorAs(t, err, &usageErr)
+}
+
 func TestAddRejectsBadSourceCombo(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "project.godot"), nil, 0o644))
