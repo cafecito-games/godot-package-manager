@@ -45,8 +45,8 @@ func (s AddonSpec) InstallName() string {
 // Hash returns a stable hash of the spec's resolvable fields, used to detect
 // drift between addons.toml and addons.lock.
 func (s AddonSpec) Hash() string {
-	repr := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s",
+	representation := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s",
 		s.Source, s.URL, s.Repo, s.Version, s.Asset, s.SourcePath, s.InstallAs)
-	sum := sha256.Sum256([]byte(repr))
-	return hex.EncodeToString(sum[:])
+	checksum := sha256.Sum256([]byte(representation))
+	return hex.EncodeToString(checksum[:])
 }
