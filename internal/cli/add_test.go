@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -48,6 +49,12 @@ func TestAddNoFlagsInvokesTUI(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "project.godot"), nil, 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "addons.toml"), []byte("[addons]\n"), 0o644))
+
+	original := runTUI
+	runTUI = func() (manifest.AddonSpec, error) {
+		return manifest.AddonSpec{}, &UsageError{Err: errors.New("tui disabled in test")}
+	}
+	defer func() { runTUI = original }()
 
 	cmd := newAddCommand(&Options{})
 	cmd.SetArgs([]string{"--dir", dir})
