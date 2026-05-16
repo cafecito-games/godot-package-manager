@@ -1,0 +1,56 @@
+# prek pre-commit hook configuration
+# Install hooks: prek install
+# Run all hooks manually: prek run --all-files
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: check-json
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: no-commit-to-branch
+        args: [--branch=main]
+
+  - repo: local
+    hooks:
+      - id: go-fmt
+        name: gofmt
+        entry: gofmt -l -w
+        language: system
+        files: '\.go$'
+        pass_filenames: true
+
+      - id: go-vet
+        name: go vet
+        entry: go vet ./...
+        language: system
+        files: '\.go$'
+        pass_filenames: false
+
+      - id: go-mod-tidy
+        name: go mod tidy
+        entry: bash -c 'go mod tidy && git diff --exit-code go.mod go.sum'
+        language: system
+        files: '^(go\.mod|go\.sum|.*\.go)$'
+        pass_filenames: false
+
+      - id: golangci-lint
+        name: golangci-lint
+        entry: golangci-lint run ./...
+        language: system
+        files: '\.go$'
+        pass_filenames: false
+
+      - id: go-test
+        name: go test
+        entry: go test ./...
+        language: system
+        files: '\.go$'
+        pass_filenames: false

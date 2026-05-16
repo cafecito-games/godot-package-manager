@@ -44,7 +44,7 @@ func newRemoveCommand(opts *Options) *cobra.Command {
 					return err
 				}
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "removed %s\n", name)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "removed %s\n", name)
 			return nil
 		},
 	}

@@ -54,7 +54,7 @@ func newListCommand(opts *Options) *cobra.Command {
 					if listing.Installed {
 						mark = "x"
 					}
-					fmt.Fprintf(cmd.OutOrStdout(), "[%s] %-20s %-16s %s\n", mark, listing.Name, listing.Source, listing.Version)
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "[%s] %-20s %-16s %s\n", mark, listing.Name, listing.Source, listing.Version)
 				}
 			})
 		},
