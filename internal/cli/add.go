@@ -7,18 +7,15 @@ import (
 	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
 	"github.com/CafecitoGames/godot-addon-manager/internal/output"
 	"github.com/CafecitoGames/godot-addon-manager/internal/source"
+	"github.com/CafecitoGames/godot-addon-manager/internal/tui"
 	"github.com/spf13/cobra"
 )
 
 // testFetcherFor, when non-nil, overrides the source layer in tests.
 var testFetcherFor func(manifest.AddonSpec) (source.Fetcher, error)
 
-// runTUI launches the interactive add wizard. It is replaced by the real
-// wizard implementation in a later change; until then the interactive path
-// reports that flags are required.
-var runTUI = func() (manifest.AddonSpec, error) {
-	return manifest.AddonSpec{}, &UsageError{Err: fmt.Errorf("interactive add is not available; pass --name and --source")}
-}
+// runTUI launches the interactive add wizard.
+var runTUI = tui.RunAddWizard
 
 // addFlags collects the flag values for `gam add`.
 type addFlags struct {
