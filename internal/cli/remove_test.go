@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -13,6 +14,8 @@ func TestRemoveDeletesAddon(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "project.godot"), nil, 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "addons.toml"),
 		[]byte("[addons]\n[addons.x]\nsource = \"archive\"\nurl = \"u\"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "addons.lock"),
+		[]byte("[addons]\n[addons.x]\nresolved_version = \"abc\"\nsource_path = \"\"\nspec_hash = \"h\"\n"), 0o644))
 	installed := filepath.Join(dir, "addons", "x")
 	require.NoError(t, os.MkdirAll(installed, 0o755))
 
@@ -24,6 +27,11 @@ func TestRemoveDeletesAddon(t *testing.T) {
 	require.True(t, os.IsNotExist(err))
 	data, _ := os.ReadFile(filepath.Join(dir, "addons.toml"))
 	require.NotContains(t, string(data), "addons.x")
+
+	lock, err := manifest.LoadLock(filepath.Join(dir, "addons.lock"))
+	require.NoError(t, err)
+	_, present := lock.Addons["x"]
+	require.False(t, present, "lock entry for x should have been removed")
 }
 
 func TestRemoveUnknownAddon(t *testing.T) {
