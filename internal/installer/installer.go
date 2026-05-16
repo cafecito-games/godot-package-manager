@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
 	"github.com/CafecitoGames/godot-addon-manager/internal/output"
@@ -12,21 +13,70 @@ import (
 )
 
 // Install resolves the source subtree within fetched.Dir and copies it into
-// <addonsDir>/<spec.InstallName()>, replacing any existing directory.
+// <addonsDir>/<spec.InstallName()>, replacing any existing directory atomically.
+// If copying fails partway, the existing addon is left untouched (rollback-safe).
 func Install(fetched source.FetchResult, spec manifest.AddonSpec, addonsDir string) error {
 	sourceRoot, err := resolveSourcePath(fetched.Dir, spec.SourcePath)
 	if err != nil {
 		return err
 	}
+
+	if err := os.MkdirAll(addonsDir, 0o755); err != nil {
+		return &output.InstallError{Err: err}
+	}
+
 	destination := filepath.Join(addonsDir, spec.InstallName())
-	if err := os.RemoveAll(destination); err != nil {
+	if err := containmentCheck(addonsDir, destination); err != nil {
+		return err
+	}
+
+	// Copy into a staging directory on the same filesystem so the final rename is atomic.
+	staging, err := os.MkdirTemp(addonsDir, ".gam-staging-*")
+	if err != nil {
 		return &output.InstallError{Err: err}
 	}
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+
+	if err := copyTree(sourceRoot, staging); err != nil {
+		os.RemoveAll(staging)
 		return &output.InstallError{Err: err}
 	}
-	if err := copyTree(sourceRoot, destination); err != nil {
-		return &output.InstallError{Err: err}
+
+	// Atomically swap staging into place, preserving the old directory as a
+	// backup so we can restore it if the rename of staging fails.
+	_, statErr := os.Stat(destination)
+	destinationExists := statErr == nil
+
+	if destinationExists {
+		backupPath := destination + ".gam-backup"
+		if err := os.Rename(destination, backupPath); err != nil {
+			os.RemoveAll(staging)
+			return &output.InstallError{Err: fmt.Errorf("could not back up existing addon: %w", err)}
+		}
+		if err := os.Rename(staging, destination); err != nil {
+			// Restore the backup so the addon is not lost.
+			os.Rename(backupPath, destination)
+			os.RemoveAll(staging)
+			return &output.InstallError{Err: fmt.Errorf("could not move staged addon into place: %w", err)}
+		}
+		os.RemoveAll(backupPath)
+	} else {
+		if err := os.Rename(staging, destination); err != nil {
+			os.RemoveAll(staging)
+			return &output.InstallError{Err: fmt.Errorf("could not move staged addon into place: %w", err)}
+		}
+	}
+
+	return nil
+}
+
+// containmentCheck returns an error if destination is not strictly inside
+// addonsDir, preventing path-traversal via crafted install_as values.
+func containmentCheck(addonsDir, destination string) error {
+	cleanAddons := filepath.Clean(addonsDir)
+	cleanDestination := filepath.Clean(destination)
+	if !strings.HasPrefix(cleanDestination, cleanAddons+string(os.PathSeparator)) {
+		return &output.InstallError{Err: fmt.Errorf(
+			"install destination %q escapes addons directory %q", destination, addonsDir)}
 	}
 	return nil
 }
@@ -37,6 +87,11 @@ func Install(fetched source.FetchResult, spec manifest.AddonSpec, addonsDir stri
 func resolveSourcePath(root, sourcePath string) (string, error) {
 	if sourcePath != "" {
 		resolved := filepath.Join(root, sourcePath)
+		cleanRoot := filepath.Clean(root)
+		cleanResolved := filepath.Clean(resolved)
+		if cleanResolved != cleanRoot && !strings.HasPrefix(cleanResolved, cleanRoot+string(os.PathSeparator)) {
+			return "", &output.InstallError{Err: fmt.Errorf("source_path %q escapes the fetched source root", sourcePath)}
+		}
 		info, err := os.Stat(resolved)
 		if err != nil {
 			return "", &output.InstallError{Err: fmt.Errorf("source_path %q in fetched source: %w", sourcePath, err)}
@@ -70,10 +125,15 @@ func resolveSourcePath(root, sourcePath string) (string, error) {
 }
 
 // copyTree recursively copies the directory src to dst.
+// Symlinks anywhere in the tree are rejected to prevent host-file exposure.
 func copyTree(src, dst string) error {
 	return filepath.WalkDir(src, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return &output.InstallError{Err: fmt.Errorf(
+				"addon source contains an unsupported symlink: %s", entry.Name())}
 		}
 		relative, err := filepath.Rel(src, path)
 		if err != nil {
