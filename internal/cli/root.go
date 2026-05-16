@@ -2,6 +2,10 @@ package cli
 
 import "github.com/spf13/cobra"
 
+// version is the build version of gam. It is "dev" for builds from source and
+// is overridden at release time via -ldflags.
+var version = "dev"
+
 // Options holds global flags shared by all subcommands.
 type Options struct {
 	JSON    bool
@@ -22,6 +26,7 @@ func NewRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "gam",
 		Short:         "Manage Godot project addons declared in addons.toml",
+		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
