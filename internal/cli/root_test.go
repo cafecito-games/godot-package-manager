@@ -15,4 +15,5 @@ func TestRootHelpListsGlobalFlags(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 	require.Contains(t, out.String(), "--json")
 	require.Contains(t, out.String(), "--verbose")
+	require.Contains(t, out.String(), "--quiet")
 }

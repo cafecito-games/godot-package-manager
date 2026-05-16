@@ -31,6 +31,6 @@ func NewRootCommand() *cobra.Command {
 	root.PersistentFlags().BoolVar(&opts.JSON, "json", false, "emit machine-readable JSON output")
 	root.PersistentFlags().BoolVarP(&opts.Verbose, "verbose", "v", false, "enable verbose logging")
 	root.PersistentFlags().BoolVarP(&opts.Quiet, "quiet", "q", false, "suppress non-error output")
-	// Subcommands are registered here as later tasks add them.
+	// Each subcommand receives opts so all commands share the same flag values.
 	return root
 }
