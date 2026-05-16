@@ -38,9 +38,11 @@ func newRemoveCommand(opts *Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			delete(lock.Addons, name)
-			if err := lock.Save(discovered.LockPath); err != nil {
-				return err
+			if _, exists := lock.Addons[name]; exists {
+				delete(lock.Addons, name)
+				if err := lock.Save(discovered.LockPath); err != nil {
+					return err
+				}
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "removed %s\n", name)
 			return nil
