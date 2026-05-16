@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,6 +38,8 @@ func TestEndToEndInstallGitAddon(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(proj, "addons.toml"), []byte(manifestBody), 0o644))
 
 	cmd := NewRootCommand()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
 	cmd.SetArgs([]string{"install", "--dir", proj})
 	require.NoError(t, cmd.Execute())
 
@@ -44,4 +47,8 @@ func TestEndToEndInstallGitAddon(t *testing.T) {
 	require.NoError(t, err)
 	_, err = os.Stat(filepath.Join(proj, "addons.lock"))
 	require.NoError(t, err)
+
+	lockBytes, err := os.ReadFile(filepath.Join(proj, "addons.lock"))
+	require.NoError(t, err)
+	require.Contains(t, string(lockBytes), "dlg")
 }

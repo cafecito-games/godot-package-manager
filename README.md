@@ -12,7 +12,7 @@ reproducible installs across machines and CI runs.
 
 ### From source
 
-Requires **Go 1.26+** and `git` on your `PATH`.
+Requires **Go 1.26.2 or newer** and `git` on your `PATH`.
 
 ```sh
 go install github.com/CafecitoGames/godot-addon-manager/cmd/gam@latest
