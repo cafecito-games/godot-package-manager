@@ -1,0 +1,56 @@
+version: 2
+
+project_name: gam
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: gam
+    main: ./cmd/gam
+    binary: gam
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/cafecito-games/godot-addon-manager/internal/cli.version={{ .Version }}
+
+archives:
+  - id: gam
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+homebrew_casks:
+  - name: gam
+    repository:
+      owner: cafecito-games
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/cafecito-games/godot-addon-manager"
+    description: "CLI addon manager for Godot projects"
+    # The release binaries are not code-signed, so strip the quarantine
+    # attribute on install to avoid Gatekeeper blocking the executable.
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/gam"]
+          end
