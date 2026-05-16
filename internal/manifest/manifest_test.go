@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -33,4 +34,16 @@ func TestHashChangesWithFields(t *testing.T) {
 	b := a
 	b.Version = "v2"
 	require.NotEqual(t, a.Hash(), b.Hash())
+}
+
+func TestLoadMissingFile(t *testing.T) {
+	_, err := Load(filepath.Join(t.TempDir(), "nonexistent.toml"))
+	require.Error(t, err)
+}
+
+func TestLoadBadTOML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad.toml")
+	require.NoError(t, os.WriteFile(path, []byte("not = = valid"), 0o644))
+	_, err := Load(path)
+	require.Error(t, err)
 }
