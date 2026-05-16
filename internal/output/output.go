@@ -1,6 +1,10 @@
 package output
 
-import "errors"
+import (
+	"encoding/json"
+	"errors"
+	"io"
+)
 
 // ExitCode is a process exit status with a defined meaning.
 type ExitCode int
@@ -31,6 +35,18 @@ type InstallError struct{ Err error }
 
 func (e *InstallError) Error() string { return e.Err.Error() }
 func (e *InstallError) Unwrap() error { return e.Err }
+
+// Render writes payload as indented JSON to w when jsonMode is true; otherwise
+// it invokes textFn to produce human-readable output.
+func Render(w io.Writer, jsonMode bool, payload any, textFn func()) error {
+	if !jsonMode {
+		textFn()
+		return nil
+	}
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(payload)
+}
 
 // CodeFor maps an error to the exit code the process should return.
 func CodeFor(err error) ExitCode {
