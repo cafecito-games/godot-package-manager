@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
+	"github.com/CafecitoGames/godot-addon-manager/internal/output"
 )
 
 // LockEntry pins one resolved addon for reproducible installs.
@@ -31,11 +32,11 @@ func LoadLock(path string) (*Lockfile, error) {
 		return &Lockfile{Addons: map[string]LockEntry{}}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("reading lockfile %s: %w", path, err)
+		return nil, &output.ManifestError{Err: fmt.Errorf("reading lockfile %s: %w", path, err)}
 	}
 	lockfile := &Lockfile{}
 	if err := toml.Unmarshal(data, lockfile); err != nil {
-		return nil, fmt.Errorf("parsing lockfile %s: %w", path, err)
+		return nil, &output.ManifestError{Err: fmt.Errorf("parsing lockfile %s: %w", path, err)}
 	}
 	if lockfile.Addons == nil {
 		lockfile.Addons = map[string]LockEntry{}
@@ -48,27 +49,27 @@ func LoadLock(path string) (*Lockfile, error) {
 func (lockfile *Lockfile) Save(path string) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".addons-lock-*.tmp")
 	if err != nil {
-		return fmt.Errorf("creating temp lockfile: %w", err)
+		return &output.ManifestError{Err: fmt.Errorf("creating temp lockfile: %w", err)}
 	}
 	tmpName := tmp.Name()
 
 	if err := toml.NewEncoder(tmp).Encode(lockfile); err != nil {
 		tmp.Close()
 		os.Remove(tmpName)
-		return fmt.Errorf("encoding lockfile %s: %w", path, err)
+		return &output.ManifestError{Err: fmt.Errorf("encoding lockfile %s: %w", path, err)}
 	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
 		os.Remove(tmpName)
-		return fmt.Errorf("syncing lockfile %s: %w", path, err)
+		return &output.ManifestError{Err: fmt.Errorf("syncing lockfile %s: %w", path, err)}
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpName)
-		return fmt.Errorf("closing lockfile %s: %w", path, err)
+		return &output.ManifestError{Err: fmt.Errorf("closing lockfile %s: %w", path, err)}
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		os.Remove(tmpName)
-		return fmt.Errorf("installing lockfile %s: %w", path, err)
+		return &output.ManifestError{Err: fmt.Errorf("installing lockfile %s: %w", path, err)}
 	}
 	return nil
 }

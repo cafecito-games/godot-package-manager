@@ -32,7 +32,7 @@ func (f *ArchiveFetcher) Fetch(ctx context.Context, spec manifest.AddonSpec) (Fe
 	}
 	dir, err := os.MkdirTemp("", "gam-archive-*")
 	if err != nil {
-		return FetchResult{}, &output.InstallError{Err: err}
+		return FetchResult{}, &output.FetchError{Err: err}
 	}
 	if err := extractArchive(spec.URL, data, dir); err != nil {
 		os.RemoveAll(dir)

@@ -65,11 +65,15 @@ func newAddCommand(opts *Options) *cobra.Command {
 			if testFetcherFor != nil {
 				runner.FetcherFor = testFetcherFor
 			}
-			if _, err := runner.InstallAddons(cmd.Context(), addonManifest, []string{spec.Name}); err != nil {
+			results, err := runner.InstallAddons(cmd.Context(), addonManifest, []string{spec.Name}, ModeInstall)
+			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "added and installed %s\n", spec.Name)
-			return nil
+			return output.Render(cmd.OutOrStdout(), opts.JSON, results, func() {
+				for _, result := range results {
+					fmt.Fprintf(cmd.OutOrStdout(), "added and installed %s\n", result.Name)
+				}
+			})
 		},
 	}
 	flags := cmd.Flags()

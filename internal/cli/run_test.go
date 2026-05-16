@@ -37,7 +37,7 @@ func TestInstallAddons(t *testing.T) {
 			return fakeFetcher{version: "1.0", checksum: "deadbeef"}, nil
 		},
 	}
-	results, err := r.InstallAddons(context.Background(), m, nil)
+	results, err := r.InstallAddons(context.Background(), m, nil, ModeInstall)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 
@@ -69,7 +69,7 @@ func TestInstallAddonsNamedSubset(t *testing.T) {
 		},
 	}
 
-	results, err := r.InstallAddons(context.Background(), m, []string{"addon-a"})
+	results, err := r.InstallAddons(context.Background(), m, []string{"addon-a"}, ModeInstall)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.Equal(t, "addon-a", results[0].Name)
@@ -99,6 +99,6 @@ func TestInstallAddonsFetcherError(t *testing.T) {
 		},
 	}
 
-	_, err := r.InstallAddons(context.Background(), m, nil)
+	_, err := r.InstallAddons(context.Background(), m, nil, ModeInstall)
 	require.ErrorIs(t, err, fetcherError)
 }
