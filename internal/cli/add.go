@@ -4,10 +4,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
-	"github.com/CafecitoGames/godot-addon-manager/internal/source"
-	"github.com/CafecitoGames/godot-addon-manager/internal/tui"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/source"
+	"github.com/cafecito-games/godot-addon-manager/internal/tui"
 	"github.com/spf13/cobra"
 )
 

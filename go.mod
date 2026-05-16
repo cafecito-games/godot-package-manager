@@ -1,4 +1,4 @@
-module github.com/CafecitoGames/godot-addon-manager
+module github.com/cafecito-games/godot-addon-manager
 
 go 1.26.2
 

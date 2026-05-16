@@ -3,9 +3,9 @@ package cli
 import (
 	"os"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
-	"github.com/CafecitoGames/godot-addon-manager/internal/project"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/project"
 )
 
 // loadProject discovers the Godot project from dir (or the current working

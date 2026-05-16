@@ -15,13 +15,13 @@ reproducible installs across machines and CI runs.
 Requires **Go 1.26.2 or newer** and `git` on your `PATH`.
 
 ```sh
-go install github.com/CafecitoGames/godot-addon-manager/cmd/gam@latest
+go install github.com/cafecito-games/godot-addon-manager/cmd/gam@latest
 ```
 
 Or build locally:
 
 ```sh
-git clone https://github.com/CafecitoGames/godot-addon-manager
+git clone https://github.com/cafecito-games/godot-addon-manager
 cd godot-addon-manager
 go build ./cmd/gam
 ```

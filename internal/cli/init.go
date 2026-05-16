@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
 	"github.com/spf13/cobra"
 )
 

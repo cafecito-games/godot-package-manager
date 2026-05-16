@@ -62,7 +62,7 @@ internal/tui/add.go                   Bubble Tea wizard for `add`
 - [ ] **Step 1: Initialize the module**
 
 ```bash
-go mod init github.com/CafecitoGames/godot-addon-manager
+go mod init github.com/cafecito-games/godot-addon-manager
 go get github.com/spf13/cobra@latest github.com/stretchr/testify@latest
 ```
 Edit `go.mod` so the `go` directive reads `go 1.26`.
@@ -195,8 +195,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/cli"
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/cli"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
 )
 
 func main() {
@@ -439,7 +439,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
 	"github.com/stretchr/testify/require"
 )
 
@@ -476,7 +476,7 @@ package manifest
 import (
 	"fmt"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
 )
 
 // Validate checks every addon entry for required and consistent fields.
@@ -727,7 +727,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
 )
 
 // Project describes a located Godot project and its gam-managed paths.
@@ -806,8 +806,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
 )
 
 // FetchResult is the outcome of fetching an addon source into a temp directory.
@@ -846,7 +846,7 @@ package source
 import (
 	"testing"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -919,7 +919,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -992,8 +992,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
 )
 
 // ArchiveFetcher downloads and extracts a plain zip or tarball URL.
@@ -1191,7 +1191,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1255,8 +1255,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
 )
 
 // GitFetcher clones a git ref using the system `git` binary, inheriting the
@@ -1359,7 +1359,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1428,8 +1428,8 @@ import (
 	"path"
 	"strings"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
 )
 
 const defaultGitHubAPIBase = "https://api.github.com"
@@ -1574,8 +1574,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
-	"github.com/CafecitoGames/godot-addon-manager/internal/source"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/source"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1653,9 +1653,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
-	"github.com/CafecitoGames/godot-addon-manager/internal/source"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/source"
 )
 
 // Install resolves the source subtree within fetched.Dir and copies it into
@@ -1795,8 +1795,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
-	"github.com/CafecitoGames/godot-addon-manager/internal/source"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/source"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1851,9 +1851,9 @@ import (
 	"context"
 	"os"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/installer"
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
-	"github.com/CafecitoGames/godot-addon-manager/internal/source"
+	"github.com/cafecito-games/godot-addon-manager/internal/installer"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/source"
 )
 
 // AddonResult reports the outcome of installing a single addon.
@@ -2092,7 +2092,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -2215,9 +2215,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
-	"github.com/CafecitoGames/godot-addon-manager/internal/project"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/project"
 	"github.com/spf13/cobra"
 )
 
@@ -2284,8 +2284,8 @@ import (
 	"os"
 	"sort"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -2357,7 +2357,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
 	"github.com/spf13/cobra"
 )
 ```
@@ -2451,7 +2451,7 @@ package cli
 import (
 	"fmt"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -2498,8 +2498,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -2592,8 +2592,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
-	"github.com/CafecitoGames/godot-addon-manager/internal/source"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/source"
 	"github.com/stretchr/testify/require"
 )
 
@@ -2642,8 +2642,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
-	"github.com/CafecitoGames/godot-addon-manager/internal/source"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/source"
 	"github.com/spf13/cobra"
 )
 
@@ -2791,7 +2791,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -2835,7 +2835,7 @@ package tui
 import (
 	"fmt"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
 )
 
 // wizardState holds the addon fields collected by the wizard. Its methods are
@@ -3020,7 +3020,7 @@ Merge the two `import` blocks in the file into one.
 - [ ] **Step 6: Wire the TUI into `gam add`** — in `internal/cli/add.go`, replace the `runTUI` stub variable:
 
 ```go
-import "github.com/CafecitoGames/godot-addon-manager/internal/tui"
+import "github.com/cafecito-games/godot-addon-manager/internal/tui"
 
 // runTUI launches the interactive add wizard.
 var runTUI = tui.RunAddWizard

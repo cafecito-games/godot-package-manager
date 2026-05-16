@@ -40,7 +40,7 @@ non-interactively so AI agents can drive it.
 - [Bubble Tea](https://github.com/charmbracelet/bubbletea) for the TUI.
 - A TOML library (`github.com/BurntSushi/toml`) for manifest parsing.
 - [testify](https://github.com/stretchr/testify) for unit tests.
-- Module path: `github.com/CafecitoGames/godot-addon-manager`. Binary: `gam`.
+- Module path: `github.com/cafecito-games/godot-addon-manager`. Binary: `gam`.
 
 ## Fetching Strategy
 

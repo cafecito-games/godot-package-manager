@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
 )
 
 // Project describes a located Godot project and its gam-managed paths.
