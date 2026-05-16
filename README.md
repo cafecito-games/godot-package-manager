@@ -10,6 +10,12 @@ reproducible installs across machines and CI runs.
 
 ## Installation
 
+### Homebrew
+
+```sh
+brew install cafecito-games/tap/gam
+```
+
 ### From source
 
 Requires **Go 1.26.2 or newer** and `git` on your `PATH`.
