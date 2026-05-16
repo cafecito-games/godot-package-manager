@@ -38,13 +38,8 @@ func FetcherFor(spec manifest.AddonSpec) (Fetcher, error) {
 	}
 }
 
-// Concrete Fetcher types returned by FetcherFor.
-type GitFetcher struct{}
+// GitHubReleaseFetcher downloads a tagged GitHub release asset.
 type GitHubReleaseFetcher struct{}
-
-func (f *GitFetcher) Fetch(_ context.Context, _ manifest.AddonSpec) (FetchResult, error) {
-	return FetchResult{}, &output.FetchError{Err: errNotImplemented}
-}
 
 func (f *GitHubReleaseFetcher) Fetch(_ context.Context, _ manifest.AddonSpec) (FetchResult, error) {
 	return FetchResult{}, &output.FetchError{Err: errNotImplemented}
