@@ -33,5 +33,7 @@ func NewRootCommand() *cobra.Command {
 	root.PersistentFlags().BoolVarP(&opts.Quiet, "quiet", "q", false, "suppress non-error output")
 	// Each subcommand receives opts so all commands share the same flag values.
 	root.AddCommand(newInitCommand(opts))
+	root.AddCommand(newInstallCommand(opts))
+	root.AddCommand(newListCommand(opts))
 	return root
 }
