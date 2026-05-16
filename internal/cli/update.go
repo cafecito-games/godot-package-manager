@@ -24,7 +24,7 @@ func newUpdateCommand(opts *Options) *cobra.Command {
 				}
 			}
 			runner := NewRunner(discovered.AddonsDir, discovered.LockPath)
-			results, err := runner.InstallAddons(cmd.Context(), addonManifest, args)
+			results, err := runner.InstallAddons(cmd.Context(), addonManifest, args, ModeUpdate)
 			if err != nil {
 				return err
 			}

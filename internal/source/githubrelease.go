@@ -63,7 +63,7 @@ func (f *GitHubReleaseFetcher) Fetch(ctx context.Context, spec manifest.AddonSpe
 	}
 	dir, err := os.MkdirTemp("", "gam-ghrel-*")
 	if err != nil {
-		return FetchResult{}, &output.InstallError{Err: err}
+		return FetchResult{}, &output.FetchError{Err: err}
 	}
 	if err := extractArchive(asset.Name, data, dir); err != nil {
 		os.RemoveAll(dir)

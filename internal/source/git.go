@@ -18,27 +18,47 @@ import (
 type GitFetcher struct{}
 
 // Fetch clones spec.URL at spec.Version into a temp directory and reports the
-// resolved commit SHA.
+// resolved commit SHA. It first attempts a shallow fetch of the ref; if that
+// fails (e.g. when Version is a bare commit SHA that the server cannot resolve
+// via smart-fetch), it falls back to a full fetch and then checks out the
+// exact SHA or ref.
 func (f *GitFetcher) Fetch(ctx context.Context, spec manifest.AddonSpec) (FetchResult, error) {
 	if _, err := exec.LookPath("git"); err != nil {
 		return FetchResult{}, &output.FetchError{Err: fmt.Errorf("git binary not found on PATH")}
 	}
 	dir, err := os.MkdirTemp("", "gam-git-*")
 	if err != nil {
-		return FetchResult{}, &output.InstallError{Err: err}
+		return FetchResult{}, &output.FetchError{Err: err}
 	}
-	steps := [][]string{
-		{"init", "-q"},
-		{"remote", "add", "origin", spec.URL},
-		{"fetch", "-q", "--depth", "1", "origin", spec.Version},
-		{"-c", "advice.detachedHead=false", "checkout", "-q", "FETCH_HEAD"},
+
+	if err := runGit(ctx, dir, "init", "-q"); err != nil {
+		os.RemoveAll(dir)
+		return FetchResult{}, err
 	}
-	for _, args := range steps {
-		if err := runGit(ctx, dir, args...); err != nil {
+	if err := runGit(ctx, dir, "remote", "add", "origin", spec.URL); err != nil {
+		os.RemoveAll(dir)
+		return FetchResult{}, err
+	}
+
+	shallowErr := runGit(ctx, dir, "fetch", "-q", "--depth", "1", "origin", spec.Version)
+	if shallowErr == nil {
+		if err := runGit(ctx, dir, "-c", "advice.detachedHead=false", "checkout", "-q", "FETCH_HEAD"); err != nil {
+			os.RemoveAll(dir)
+			return FetchResult{}, err
+		}
+	} else {
+		// Shallow fetch failed — fall back to a full fetch so that bare commit
+		// SHAs and other refs not served by the shallow protocol still work.
+		if err := runGit(ctx, dir, "fetch", "-q", "origin"); err != nil {
+			os.RemoveAll(dir)
+			return FetchResult{}, err
+		}
+		if err := runGit(ctx, dir, "-c", "advice.detachedHead=false", "checkout", "-q", spec.Version); err != nil {
 			os.RemoveAll(dir)
 			return FetchResult{}, err
 		}
 	}
+
 	stdout, err := gitOutput(ctx, dir, "rev-parse", "HEAD")
 	if err != nil {
 		os.RemoveAll(dir)

@@ -19,7 +19,7 @@ func newInstallCommand(opts *Options) *cobra.Command {
 				return err
 			}
 			runner := NewRunner(discovered.AddonsDir, discovered.LockPath)
-			results, err := runner.InstallAddons(cmd.Context(), addonManifest, nil)
+			results, err := runner.InstallAddons(cmd.Context(), addonManifest, nil, ModeInstall)
 			if err != nil {
 				return err
 			}

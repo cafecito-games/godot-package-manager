@@ -2,11 +2,24 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/CafecitoGames/godot-addon-manager/internal/installer"
 	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
+	"github.com/CafecitoGames/godot-addon-manager/internal/output"
 	"github.com/CafecitoGames/godot-addon-manager/internal/source"
+)
+
+// InstallMode controls whether the lockfile pins are honored.
+type InstallMode int
+
+const (
+	// ModeInstall installs addons at their locked versions when the lock entry
+	// is still consistent with addons.toml.
+	ModeInstall InstallMode = iota
+	// ModeUpdate ignores existing pins and re-resolves every target.
+	ModeUpdate
 )
 
 // AddonResult reports the outcome of installing a single addon.
@@ -31,7 +44,10 @@ func NewRunner(addonsDir, lockPath string) *Runner {
 
 // InstallAddons fetches and installs the named addons (all addons when names is
 // nil/empty), then writes addons.lock. It returns one AddonResult per addon.
-func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Manifest, names []string) ([]AddonResult, error) {
+// When mode is ModeInstall, existing lock entries that are consistent with the
+// manifest are honored for reproducible installs. When mode is ModeUpdate,
+// every target is re-resolved regardless of lock state.
+func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Manifest, names []string, mode InstallMode) ([]AddonResult, error) {
 	lock, err := manifest.LoadLock(r.LockPath)
 	if err != nil {
 		return nil, err
@@ -39,14 +55,35 @@ func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Mani
 	targets := selectAddons(addonManifest, names)
 	var results []AddonResult
 	for _, spec := range targets {
-		fetcher, err := r.FetcherFor(spec)
+		useLock := mode == ModeInstall && !manifest.NeedsResolve(spec, lock)
+
+		effectiveSpec := spec
+		if useLock && spec.Source == manifest.SourceGit {
+			// Pin the git fetch to the exact locked commit SHA so the shallow
+			// clone checks out the same revision that was originally resolved.
+			effectiveSpec.Version = lock.Addons[spec.Name].ResolvedVersion
+		}
+
+		fetcher, err := r.FetcherFor(effectiveSpec)
 		if err != nil {
 			return nil, err
 		}
-		fetched, err := fetcher.Fetch(ctx, spec)
+		fetched, err := fetcher.Fetch(ctx, effectiveSpec)
 		if err != nil {
 			return nil, err
 		}
+
+		if useLock {
+			entry := lock.Addons[spec.Name]
+			if entry.Checksum != "" && fetched.Checksum != "" && entry.Checksum != fetched.Checksum {
+				os.RemoveAll(fetched.Dir)
+				return nil, &output.FetchError{Err: fmt.Errorf(
+					"addon %q: checksum mismatch (lock: %s, fetched: %s)",
+					spec.Name, entry.Checksum, fetched.Checksum,
+				)}
+			}
+		}
+
 		err = installer.Install(fetched, spec, r.AddonsDir)
 		os.RemoveAll(fetched.Dir)
 		if err != nil {
