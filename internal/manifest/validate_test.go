@@ -16,9 +16,39 @@ func TestValidateRejectsBadSource(t *testing.T) {
 	require.True(t, errors.As(err, &me))
 }
 
-func TestValidateRequiresGitFields(t *testing.T) {
-	m := &Manifest{Addons: map[string]AddonSpec{"x": {Name: "x", Source: SourceGit, URL: "u"}}}
-	require.Error(t, m.Validate()) // missing version
+func TestValidateRejectsMissingFields(t *testing.T) {
+	cases := []struct {
+		name  string
+		addon AddonSpec
+	}{
+		{
+			name:  "git missing version",
+			addon: AddonSpec{Name: "x", Source: SourceGit, URL: "u"},
+		},
+		{
+			name:  "git missing url",
+			addon: AddonSpec{Name: "x", Source: SourceGit, Version: "v1"},
+		},
+		{
+			name:  "github-release missing repo",
+			addon: AddonSpec{Name: "x", Source: SourceGitHubRelease, Version: "1.0"},
+		},
+		{
+			name:  "github-release missing version",
+			addon: AddonSpec{Name: "x", Source: SourceGitHubRelease, Repo: "o/r"},
+		},
+		{
+			name:  "archive missing url",
+			addon: AddonSpec{Name: "x", Source: SourceArchive},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &Manifest{Addons: map[string]AddonSpec{"x": tc.addon}}
+			require.Error(t, m.Validate())
+		})
+	}
 }
 
 func TestValidateAcceptsValidManifest(t *testing.T) {
