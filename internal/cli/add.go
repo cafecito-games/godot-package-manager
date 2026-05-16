@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
+	"github.com/CafecitoGames/godot-addon-manager/internal/output"
 	"github.com/CafecitoGames/godot-addon-manager/internal/source"
 	"github.com/spf13/cobra"
 )
@@ -35,6 +37,7 @@ func newAddCommand(opts *Options) *cobra.Command {
 				return err
 			}
 			var spec manifest.AddonSpec
+			// With neither identifying flag set, fall back to the interactive wizard.
 			if flagValues.name == "" && flagValues.source == "" {
 				spec, err = runTUI()
 				if err != nil {
@@ -51,6 +54,10 @@ func newAddCommand(opts *Options) *cobra.Command {
 			}
 			single := &manifest.Manifest{Addons: map[string]manifest.AddonSpec{spec.Name: spec}}
 			if err := single.Validate(); err != nil {
+				var manifestErr *output.ManifestError
+				if errors.As(err, &manifestErr) {
+					return &UsageError{Err: manifestErr.Err}
+				}
 				return &UsageError{Err: err}
 			}
 			addonManifest.Addons[spec.Name] = spec
