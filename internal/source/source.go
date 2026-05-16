@@ -2,14 +2,11 @@ package source
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
 	"github.com/CafecitoGames/godot-addon-manager/internal/output"
 )
-
-var errNotImplemented = errors.New("fetcher not implemented")
 
 // FetchResult is the outcome of fetching an addon source into a temp directory.
 type FetchResult struct {
@@ -38,9 +35,3 @@ func FetcherFor(spec manifest.AddonSpec) (Fetcher, error) {
 	}
 }
 
-// GitHubReleaseFetcher downloads a tagged GitHub release asset.
-type GitHubReleaseFetcher struct{}
-
-func (f *GitHubReleaseFetcher) Fetch(_ context.Context, _ manifest.AddonSpec) (FetchResult, error) {
-	return FetchResult{}, &output.FetchError{Err: errNotImplemented}
-}
