@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestInstallCommandJSON(t *testing.T) {
+func TestInstallCommandValidationError(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "project.godot"), nil, 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "addons.toml"),
