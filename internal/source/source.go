@@ -2,11 +2,14 @@ package source
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
 	"github.com/CafecitoGames/godot-addon-manager/internal/output"
 )
+
+var errNotImplemented = errors.New("fetcher not implemented")
 
 // FetchResult is the outcome of fetching an addon source into a temp directory.
 type FetchResult struct {
@@ -35,19 +38,19 @@ func FetcherFor(spec manifest.AddonSpec) (Fetcher, error) {
 	}
 }
 
-// Concrete fetcher types; their Fetch methods are implemented in their own files.
+// Concrete Fetcher types returned by FetcherFor.
 type GitFetcher struct{}
 type ArchiveFetcher struct{}
 type GitHubReleaseFetcher struct{}
 
 func (f *GitFetcher) Fetch(_ context.Context, _ manifest.AddonSpec) (FetchResult, error) {
-	return FetchResult{}, &output.FetchError{Err: fmt.Errorf("git fetcher not yet implemented")}
+	return FetchResult{}, &output.FetchError{Err: errNotImplemented}
 }
 
 func (f *ArchiveFetcher) Fetch(_ context.Context, _ manifest.AddonSpec) (FetchResult, error) {
-	return FetchResult{}, &output.FetchError{Err: fmt.Errorf("archive fetcher not yet implemented")}
+	return FetchResult{}, &output.FetchError{Err: errNotImplemented}
 }
 
 func (f *GitHubReleaseFetcher) Fetch(_ context.Context, _ manifest.AddonSpec) (FetchResult, error) {
-	return FetchResult{}, &output.FetchError{Err: fmt.Errorf("github release fetcher not yet implemented")}
+	return FetchResult{}, &output.FetchError{Err: errNotImplemented}
 }
