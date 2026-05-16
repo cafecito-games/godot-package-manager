@@ -61,6 +61,9 @@ func RunAddWizard() (manifest.AddonSpec, error) {
 		return manifest.AddonSpec{}, err
 	}
 	spec := state.spec()
+	if spec.Name == "" {
+		return manifest.AddonSpec{}, fmt.Errorf("addon name is required")
+	}
 	addons := &manifest.Manifest{Addons: map[string]manifest.AddonSpec{spec.Name: spec}}
 	if err := addons.Validate(); err != nil {
 		return manifest.AddonSpec{}, fmt.Errorf("wizard produced invalid addon: %w", err)
@@ -168,7 +171,10 @@ func runProgram() (*wizardState, error) {
 	if err != nil {
 		return nil, err
 	}
-	finalModel := final.(model)
+	finalModel, ok := final.(model)
+	if !ok {
+		return nil, fmt.Errorf("unexpected model type from tea program")
+	}
 	if finalModel.err != nil {
 		return nil, finalModel.err
 	}

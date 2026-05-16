@@ -35,3 +35,14 @@ func TestWizardFieldsForRelease(t *testing.T) {
 	wizard.setSource(manifest.SourceGitHubRelease)
 	require.Equal(t, []string{"name", "repo", "version", "asset", "source_path", "install_as"}, wizard.fieldOrder())
 }
+
+func TestWizardRejectsEmptyName(t *testing.T) {
+	wizard := newWizardState()
+	wizard.setSource(manifest.SourceGit)
+	wizard.set("url", "https://example.com/repo.git")
+	wizard.set("version", "v1.0")
+	// name is intentionally not set
+
+	spec := wizard.spec()
+	require.Equal(t, "", spec.Name, "spec should have empty name when name field was not set")
+}
