@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/CafecitoGames/godot-addon-manager/internal/output"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,4 +26,6 @@ func TestDiscoverWalksUp(t *testing.T) {
 func TestDiscoverNotFound(t *testing.T) {
 	_, err := Discover(t.TempDir())
 	require.Error(t, err)
+	var manifestErr *output.ManifestError
+	require.ErrorAs(t, err, &manifestErr)
 }
