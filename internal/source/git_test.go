@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
+	"github.com/CafecitoGames/godot-addon-manager/internal/output"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,7 +32,7 @@ func makeLocalRepo(t *testing.T) string {
 	return dir
 }
 
-func TestGitFetchCheckoutsTag(t *testing.T) {
+func TestGitFetchChecksOutTag(t *testing.T) {
 	repo := makeLocalRepo(t)
 	f := &GitFetcher{}
 	res, err := f.Fetch(context.Background(), manifest.AddonSpec{
@@ -51,4 +52,6 @@ func TestGitFetchBadRef(t *testing.T) {
 		Source: manifest.SourceGit, URL: repo, Version: "v9.9",
 	})
 	require.Error(t, err)
+	var fetchError *output.FetchError
+	require.ErrorAs(t, err, &fetchError)
 }

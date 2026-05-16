@@ -3,6 +3,7 @@ package source
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -63,6 +64,11 @@ func gitOutput(ctx context.Context, directory string, args ...string) (string, e
 	cmd.Dir = directory
 	stdout, err := cmd.Output()
 	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return "", &output.FetchError{Err: fmt.Errorf("git %s: %w: %s",
+				strings.Join(args, " "), err, strings.TrimSpace(string(exitErr.Stderr)))}
+		}
 		return "", &output.FetchError{Err: fmt.Errorf("git %s: %w", strings.Join(args, " "), err)}
 	}
 	return string(stdout), nil
