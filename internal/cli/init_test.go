@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/CafecitoGames/godot-addon-manager/internal/output"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,6 +18,7 @@ func TestInitCreatesManifest(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dir, "addons.toml"))
 	require.NoError(t, err)
 	require.Contains(t, string(data), "[addons]")
+	require.Contains(t, string(data), "# [addons.dialogue_manager]")
 }
 
 func TestInitDoesNotOverwrite(t *testing.T) {
@@ -24,5 +26,8 @@ func TestInitDoesNotOverwrite(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "addons.toml"), []byte("existing"), 0o644))
 	cmd := newInitCommand(&Options{})
 	cmd.SetArgs([]string{"--dir", dir})
-	require.Error(t, cmd.Execute())
+	err := cmd.Execute()
+	require.Error(t, err)
+	var manifestErr *output.ManifestError
+	require.ErrorAs(t, err, &manifestErr)
 }
