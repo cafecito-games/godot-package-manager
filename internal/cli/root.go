@@ -32,5 +32,6 @@ func NewRootCommand() *cobra.Command {
 	root.PersistentFlags().BoolVarP(&opts.Verbose, "verbose", "v", false, "enable verbose logging")
 	root.PersistentFlags().BoolVarP(&opts.Quiet, "quiet", "q", false, "suppress non-error output")
 	// Each subcommand receives opts so all commands share the same flag values.
+	root.AddCommand(newInitCommand(opts))
 	return root
 }
