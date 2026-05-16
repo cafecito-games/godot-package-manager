@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/installer"
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
-	"github.com/CafecitoGames/godot-addon-manager/internal/source"
+	"github.com/cafecito-games/godot-addon-manager/internal/installer"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/source"
 )
 
 // InstallMode controls whether the lockfile pins are honored.

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
 )
 
 // Validate checks every addon entry for required and consistent fields.

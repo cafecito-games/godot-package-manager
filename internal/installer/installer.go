@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
-	"github.com/CafecitoGames/godot-addon-manager/internal/source"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/source"
 )
 
 // Install resolves the source subtree within fetched.Dir and copies it into

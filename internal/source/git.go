@@ -9,8 +9,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
-	"github.com/CafecitoGames/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-addon-manager/internal/output"
 )
 
 // GitFetcher clones a git ref using the system `git` binary, inheriting the
