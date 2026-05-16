@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/CafecitoGames/godot-addon-manager/internal/manifest"
+	"github.com/CafecitoGames/godot-addon-manager/internal/output"
 	"github.com/CafecitoGames/godot-addon-manager/internal/source"
 	"github.com/stretchr/testify/require"
 )
@@ -54,7 +55,21 @@ func TestInstallUsesRootWhenNoAddonsDir(t *testing.T) {
 func TestInstallAmbiguousFails(t *testing.T) {
 	fetched := t.TempDir()
 	writeTree(t, fetched, map[string]string{"addons/a/x": "1", "addons/b/y": "2"})
-	require.Error(t, Install(source.FetchResult{Dir: fetched}, manifest.AddonSpec{Name: "dlg"}, t.TempDir()))
+	err := Install(source.FetchResult{Dir: fetched}, manifest.AddonSpec{Name: "dlg"}, t.TempDir())
+	require.Error(t, err)
+	var installErr *output.InstallError
+	require.ErrorAs(t, err, &installErr)
+}
+
+func TestInstallBadExplicitSourcePath(t *testing.T) {
+	fetched := t.TempDir()
+	writeTree(t, fetched, map[string]string{"addons/dlg/plugin.cfg": "[plugin]"})
+	err := Install(source.FetchResult{Dir: fetched}, manifest.AddonSpec{
+		Name: "dlg", SourcePath: "addons/does_not_exist",
+	}, t.TempDir())
+	require.Error(t, err)
+	var installErr *output.InstallError
+	require.ErrorAs(t, err, &installErr)
 }
 
 func TestInstallReplacesStaleFiles(t *testing.T) {
