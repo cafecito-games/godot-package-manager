@@ -38,8 +38,11 @@ func resolveSourcePath(root, sourcePath string) (string, error) {
 	if sourcePath != "" {
 		resolved := filepath.Join(root, sourcePath)
 		info, err := os.Stat(resolved)
-		if err != nil || !info.IsDir() {
-			return "", &output.InstallError{Err: fmt.Errorf("source_path %q not found in fetched source", sourcePath)}
+		if err != nil {
+			return "", &output.InstallError{Err: fmt.Errorf("source_path %q in fetched source: %w", sourcePath, err)}
+		}
+		if !info.IsDir() {
+			return "", &output.InstallError{Err: fmt.Errorf("source_path %q is not a directory", sourcePath)}
 		}
 		return resolved, nil
 	}
@@ -94,9 +97,6 @@ func copyFile(src, dst string, mode os.FileMode) error {
 		return err
 	}
 	defer in.Close()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode|0o200)
 	if err != nil {
 		return err
