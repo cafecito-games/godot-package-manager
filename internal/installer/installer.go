@@ -37,7 +37,7 @@ func Install(fetched source.FetchResult, spec manifest.AddonSpec, addonsDir stri
 	}
 
 	if err := copyTree(sourceRoot, staging); err != nil {
-		os.RemoveAll(staging)
+		_ = os.RemoveAll(staging)
 		return &output.InstallError{Err: err}
 	}
 
@@ -49,19 +49,19 @@ func Install(fetched source.FetchResult, spec manifest.AddonSpec, addonsDir stri
 	if destinationExists {
 		backupPath := destination + ".gam-backup"
 		if err := os.Rename(destination, backupPath); err != nil {
-			os.RemoveAll(staging)
+			_ = os.RemoveAll(staging)
 			return &output.InstallError{Err: fmt.Errorf("could not back up existing addon: %w", err)}
 		}
 		if err := os.Rename(staging, destination); err != nil {
 			// Restore the backup so the addon is not lost.
-			os.Rename(backupPath, destination)
-			os.RemoveAll(staging)
+			_ = os.Rename(backupPath, destination)
+			_ = os.RemoveAll(staging)
 			return &output.InstallError{Err: fmt.Errorf("could not move staged addon into place: %w", err)}
 		}
-		os.RemoveAll(backupPath)
+		_ = os.RemoveAll(backupPath)
 	} else {
 		if err := os.Rename(staging, destination); err != nil {
-			os.RemoveAll(staging)
+			_ = os.RemoveAll(staging)
 			return &output.InstallError{Err: fmt.Errorf("could not move staged addon into place: %w", err)}
 		}
 	}
@@ -156,12 +156,12 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode|0o200)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 	_, err = io.Copy(out, in)
 	return err
 }

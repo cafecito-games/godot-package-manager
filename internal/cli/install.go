@@ -25,9 +25,9 @@ func newInstallCommand(opts *Options) *cobra.Command {
 			}
 			return output.Render(cmd.OutOrStdout(), opts.JSON, results, func() {
 				for _, result := range results {
-					fmt.Fprintf(cmd.OutOrStdout(), "installed %s @ %s\n", result.Name, result.ResolvedVersion)
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "installed %s @ %s\n", result.Name, result.ResolvedVersion)
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%d addon(s) installed\n", len(results))
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%d addon(s) installed\n", len(results))
 			})
 		},
 	}

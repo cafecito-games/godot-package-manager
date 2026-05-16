@@ -54,21 +54,21 @@ func (lockfile *Lockfile) Save(path string) error {
 	tmpName := tmp.Name()
 
 	if err := toml.NewEncoder(tmp).Encode(lockfile); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return &output.ManifestError{Err: fmt.Errorf("encoding lockfile %s: %w", path, err)}
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return &output.ManifestError{Err: fmt.Errorf("syncing lockfile %s: %w", path, err)}
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return &output.ManifestError{Err: fmt.Errorf("closing lockfile %s: %w", path, err)}
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return &output.ManifestError{Err: fmt.Errorf("installing lockfile %s: %w", path, err)}
 	}
 	return nil

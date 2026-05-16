@@ -34,4 +34,3 @@ func FetcherFor(spec manifest.AddonSpec) (Fetcher, error) {
 		return nil, &output.FetchError{Err: fmt.Errorf("no fetcher for source %q", spec.Source)}
 	}
 }
-

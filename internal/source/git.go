@@ -32,36 +32,36 @@ func (f *GitFetcher) Fetch(ctx context.Context, spec manifest.AddonSpec) (FetchR
 	}
 
 	if err := runGit(ctx, dir, "init", "-q"); err != nil {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		return FetchResult{}, err
 	}
 	if err := runGit(ctx, dir, "remote", "add", "origin", spec.URL); err != nil {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		return FetchResult{}, err
 	}
 
 	shallowErr := runGit(ctx, dir, "fetch", "-q", "--depth", "1", "origin", spec.Version)
 	if shallowErr == nil {
 		if err := runGit(ctx, dir, "-c", "advice.detachedHead=false", "checkout", "-q", "FETCH_HEAD"); err != nil {
-			os.RemoveAll(dir)
+			_ = os.RemoveAll(dir)
 			return FetchResult{}, err
 		}
 	} else {
 		// Shallow fetch failed — fall back to a full fetch so that bare commit
 		// SHAs and other refs not served by the shallow protocol still work.
 		if err := runGit(ctx, dir, "fetch", "-q", "origin"); err != nil {
-			os.RemoveAll(dir)
+			_ = os.RemoveAll(dir)
 			return FetchResult{}, err
 		}
 		if err := runGit(ctx, dir, "-c", "advice.detachedHead=false", "checkout", "-q", spec.Version); err != nil {
-			os.RemoveAll(dir)
+			_ = os.RemoveAll(dir)
 			return FetchResult{}, err
 		}
 	}
 
 	stdout, err := gitOutput(ctx, dir, "rev-parse", "HEAD")
 	if err != nil {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		return FetchResult{}, err
 	}
 	return FetchResult{Dir: dir, ResolvedVersion: strings.TrimSpace(stdout)}, nil

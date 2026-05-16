@@ -66,7 +66,7 @@ func (f *GitHubReleaseFetcher) Fetch(ctx context.Context, spec manifest.AddonSpe
 		return FetchResult{}, &output.FetchError{Err: err}
 	}
 	if err := extractArchive(asset.Name, data, dir); err != nil {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		return FetchResult{}, err
 	}
 	sum := sha256.Sum256(data)
