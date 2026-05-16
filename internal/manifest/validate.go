@@ -17,6 +17,7 @@ func (m *Manifest) Validate() error {
 	return nil
 }
 
+// validateSpec checks one addon entry's required fields for its source type.
 func validateSpec(name string, addon AddonSpec) error {
 	switch addon.Source {
 	case SourceGit:
