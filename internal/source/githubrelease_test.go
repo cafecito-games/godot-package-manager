@@ -20,7 +20,7 @@ func TestGitHubReleaseFetch(t *testing.T) {
 	mux.HandleFunc("/repos/owner/repo/releases/tags/1.0", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"assets": []map[string]any{
-				{"name": "addon.zip", "browser_download_url": "ASSETURL"},
+				{"name": "addon.zip", "url": "ASSETURL"},
 			},
 		})
 	})
@@ -38,13 +38,47 @@ func TestGitHubReleaseFetch(t *testing.T) {
 	require.Equal(t, "1.0", res.ResolvedVersion)
 }
 
+func TestGitHubReleaseDownloadsAssetViaAPIURL(t *testing.T) {
+	payload := zipBytes(t, map[string]string{"plugin.cfg": "[plugin]"})
+	var assetAccept string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/owner/repo/releases/tags/1.0", func(w http.ResponseWriter, r *http.Request) {
+		// Private-repo releases: only the API asset URL is downloadable; the
+		// browser_download_url returns 404 even with a valid token.
+		assetAPIURL := "http://" + r.Host + "/repos/owner/repo/releases/assets/42"
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"assets": []map[string]any{
+				{"name": "addon.zip", "url": assetAPIURL, "browser_download_url": "http://" + r.Host + "/private-404"},
+			},
+		})
+	})
+	mux.HandleFunc("/repos/owner/repo/releases/assets/42", func(w http.ResponseWriter, r *http.Request) {
+		assetAccept = r.Header.Get("Accept")
+		_, _ = w.Write(payload)
+	})
+	mux.HandleFunc("/private-404", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	f := &GitHubReleaseFetcher{APIBase: srv.URL}
+	res, err := f.Fetch(context.Background(), manifest.AddonSpec{
+		Source: manifest.SourceGitHubRelease, Repo: "owner/repo", Version: "1.0", Asset: "addon.zip",
+	})
+	require.NoError(t, err)
+	defer os.RemoveAll(res.Dir)
+	require.Equal(t, "application/octet-stream", assetAccept)
+}
+
 func TestGitHubReleaseAmbiguousAsset(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/o/r/releases/tags/1.0", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"assets": []map[string]any{
-				{"name": "a.zip", "browser_download_url": "u1"},
-				{"name": "b.zip", "browser_download_url": "u2"},
+				{"name": "a.zip", "url": "u1"},
+				{"name": "b.zip", "url": "u2"},
 			},
 		})
 	})
@@ -64,7 +98,7 @@ func TestGitHubReleaseNoMatchingAsset(t *testing.T) {
 	mux.HandleFunc("/repos/o/r/releases/tags/1.0", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"assets": []map[string]any{
-				{"name": "a.zip", "browser_download_url": "u1"},
+				{"name": "a.zip", "url": "u1"},
 			},
 		})
 	})
@@ -85,7 +119,7 @@ func TestGitHubReleaseSoleAsset(t *testing.T) {
 	mux.HandleFunc("/repos/owner/repo/releases/tags/1.0", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"assets": []map[string]any{
-				{"name": "addon.zip", "browser_download_url": "ASSETURL"},
+				{"name": "addon.zip", "url": "ASSETURL"},
 			},
 		})
 	})
@@ -114,7 +148,7 @@ func TestGitHubReleaseSendsToken(t *testing.T) {
 		receivedAuthHeader = r.Header.Get("Authorization")
 		json.NewEncoder(w).Encode(map[string]any{
 			"assets": []map[string]any{
-				{"name": "addon.zip", "browser_download_url": "ASSETURL"},
+				{"name": "addon.zip", "url": "ASSETURL"},
 			},
 		})
 	})
@@ -140,7 +174,7 @@ func TestGitHubReleaseEscapesTagPathComponent(t *testing.T) {
 		gotReleasePath = r.URL.EscapedPath()
 		json.NewEncoder(w).Encode(map[string]any{
 			"assets": []map[string]any{
-				{"name": "addon.zip", "browser_download_url": "ASSETURL"},
+				{"name": "addon.zip", "url": "ASSETURL"},
 			},
 		})
 	})

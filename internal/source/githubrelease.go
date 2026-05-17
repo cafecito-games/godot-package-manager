@@ -27,8 +27,12 @@ type GitHubReleaseFetcher struct {
 }
 
 type ghAsset struct {
-	Name        string `json:"name"`
-	DownloadURL string `json:"browser_download_url"`
+	Name string `json:"name"`
+	// APIURL is the asset's REST endpoint. Downloading it with an
+	// `Accept: application/octet-stream` header works for both public and
+	// private repositories, whereas browser_download_url returns 404 for
+	// private repos even with a valid token.
+	APIURL string `json:"url"`
 }
 
 type ghRelease struct {
@@ -50,7 +54,7 @@ func (f *GitHubReleaseFetcher) Fetch(ctx context.Context, spec manifest.AddonSpe
 		url.PathEscape(repoParts[0]),
 		url.PathEscape(repoParts[1]),
 		url.PathEscape(spec.Version))
-	body, err := download(ctx, apiURL, githubHeader())
+	body, err := download(ctx, apiURL, githubHeader("application/vnd.github+json"))
 	if err != nil {
 		return FetchResult{}, err
 	}
@@ -62,11 +66,13 @@ func (f *GitHubReleaseFetcher) Fetch(ctx context.Context, spec manifest.AddonSpe
 	if err != nil {
 		return FetchResult{}, err
 	}
-	downloadURL := asset.DownloadURL
+	downloadURL := asset.APIURL
 	if f.assetURLRewrite != nil {
 		downloadURL = f.assetURLRewrite(downloadURL)
 	}
-	data, err := download(ctx, downloadURL, githubHeader())
+	// Asset bytes are served from the asset's API URL; the octet-stream Accept
+	// header tells GitHub to return the binary rather than the asset's JSON.
+	data, err := download(ctx, downloadURL, githubHeader("application/octet-stream"))
 	if err != nil {
 		return FetchResult{}, err
 	}
@@ -109,10 +115,11 @@ func selectAsset(assets []ghAsset, pattern string) (ghAsset, error) {
 	}
 }
 
-// githubHeader returns request headers including auth when a token is in env.
-func githubHeader() http.Header {
+// githubHeader returns request headers with the given Accept value, including
+// auth when a token is present in the environment.
+func githubHeader(accept string) http.Header {
 	header := http.Header{}
-	header.Set("Accept", "application/vnd.github+json")
+	header.Set("Accept", accept)
 	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
 		token = os.Getenv("GH_TOKEN")
