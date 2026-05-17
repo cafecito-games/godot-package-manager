@@ -10,10 +10,25 @@ reproducible installs across machines and CI runs.
 
 ## Installation
 
-### Homebrew
+### macOS
 
 ```sh
 brew install --cask cafecito-games/tap/gpm
+```
+
+If Homebrew reports that `cafecito-games/tap/gpm` is unavailable after a new
+release, refresh the tap checkout and retry:
+
+```sh
+brew untap cafecito-games/tap
+brew tap cafecito-games/tap
+brew install --cask cafecito-games/tap/gpm
+```
+
+### Linux
+
+```sh
+go install github.com/cafecito-games/godot-package-manager/cmd/gpm@latest
 ```
 
 ### From source
