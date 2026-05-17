@@ -3,11 +3,11 @@ package cli
 import (
 	"fmt"
 
-	"github.com/cafecito-games/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/output"
 	"github.com/spf13/cobra"
 )
 
-// newInstallCommand builds `gam install`.
+// newInstallCommand builds `gpm install`.
 func newInstallCommand(opts *Options) *cobra.Command {
 	var dir string
 	cmd := &cobra.Command{

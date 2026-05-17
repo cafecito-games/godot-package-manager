@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
-	"github.com/cafecito-games/godot-addon-manager/internal/output"
-	"github.com/cafecito-games/godot-addon-manager/internal/source"
+	"github.com/cafecito-games/godot-package-manager/internal/manifest"
+	"github.com/cafecito-games/godot-package-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/source"
 )
 
 // Install resolves the source subtree within fetched.Dir and copies it into
@@ -31,7 +31,7 @@ func Install(fetched source.FetchResult, spec manifest.AddonSpec, addonsDir stri
 	}
 
 	// Copy into a staging directory on the same filesystem so the final rename is atomic.
-	staging, err := os.MkdirTemp(addonsDir, ".gam-staging-*")
+	staging, err := os.MkdirTemp(addonsDir, ".gpm-staging-*")
 	if err != nil {
 		return &output.InstallError{Err: err}
 	}
@@ -47,7 +47,7 @@ func Install(fetched source.FetchResult, spec manifest.AddonSpec, addonsDir stri
 	destinationExists := statErr == nil
 
 	if destinationExists {
-		backupPath := destination + ".gam-backup"
+		backupPath := destination + ".gpm-backup"
 		if err := os.Rename(destination, backupPath); err != nil {
 			_ = os.RemoveAll(staging)
 			return &output.InstallError{Err: fmt.Errorf("could not back up existing addon: %w", err)}

@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/cafecito-games/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/output"
 	"github.com/spf13/cobra"
 )
 
-// addonListing is the per-addon record emitted by `gam list`.
+// addonListing is the per-addon record emitted by `gpm list`.
 type addonListing struct {
 	Name      string `json:"name"`
 	Source    string `json:"source"`
@@ -18,7 +18,7 @@ type addonListing struct {
 	Installed bool   `json:"installed"`
 }
 
-// newListCommand builds `gam list`.
+// newListCommand builds `gpm list`.
 func newListCommand(opts *Options) *cobra.Command {
 	var dir string
 	cmd := &cobra.Command{

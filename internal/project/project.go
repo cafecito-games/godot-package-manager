@@ -5,10 +5,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/cafecito-games/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/output"
 )
 
-// Project describes a located Godot project and its gam-managed paths.
+// Project describes a located Godot project and its gpm-managed paths.
 type Project struct {
 	Root         string // directory containing project.godot
 	ManifestPath string // <Root>/addons.toml

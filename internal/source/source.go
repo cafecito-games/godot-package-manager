@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
-	"github.com/cafecito-games/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/manifest"
+	"github.com/cafecito-games/godot-package-manager/internal/output"
 )
 
 // FetchResult is the outcome of fetching an addon source into a temp directory.

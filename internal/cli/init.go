@@ -7,12 +7,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/cafecito-games/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/output"
 	"github.com/spf13/cobra"
 )
 
-const starterManifest = `# Godot addon manifest managed by gam.
-# Add addons with ` + "`gam add`" + ` or by hand. Example:
+const starterManifest = `# Godot addon manifest managed by gpm.
+# Add addons with ` + "`gpm add`" + ` or by hand. Example:
 #
 # [addons.dialogue_manager]
 # source      = "git"
@@ -23,7 +23,7 @@ const starterManifest = `# Godot addon manifest managed by gam.
 [addons]
 `
 
-// newInitCommand builds `gam init`.
+// newInitCommand builds `gpm init`.
 func newInitCommand(opts *Options) *cobra.Command {
 	var dir string
 	cmd := &cobra.Command{

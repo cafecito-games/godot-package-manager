@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-package-manager/internal/manifest"
 	"github.com/stretchr/testify/require"
 )
 

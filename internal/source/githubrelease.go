@@ -11,8 +11,8 @@ import (
 	"path"
 	"strings"
 
-	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
-	"github.com/cafecito-games/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/manifest"
+	"github.com/cafecito-games/godot-package-manager/internal/output"
 )
 
 const defaultGitHubAPIBase = "https://api.github.com"
@@ -61,7 +61,7 @@ func (f *GitHubReleaseFetcher) Fetch(ctx context.Context, spec manifest.AddonSpe
 	if err != nil {
 		return FetchResult{}, err
 	}
-	dir, err := os.MkdirTemp("", "gam-ghrel-*")
+	dir, err := os.MkdirTemp("", "gpm-ghrel-*")
 	if err != nil {
 		return FetchResult{}, &output.FetchError{Err: err}
 	}
