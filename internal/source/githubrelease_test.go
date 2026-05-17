@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/cafecito-games/godot-package-manager/internal/manifest"
@@ -128,4 +129,32 @@ func TestGitHubReleaseSendsToken(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(res.Dir)
 	require.Equal(t, "Bearer secret123", receivedAuthHeader)
+}
+
+func TestGitHubReleaseEscapesTagPathComponent(t *testing.T) {
+	payload := zipBytes(t, map[string]string{"plugin.cfg": "[plugin]"})
+	var gotReleasePath string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		gotReleasePath = r.URL.EscapedPath()
+		json.NewEncoder(w).Encode(map[string]any{
+			"assets": []map[string]any{
+				{"name": "addon.zip", "browser_download_url": "ASSETURL"},
+			},
+		})
+	})
+	mux.HandleFunc("/asset.zip", func(w http.ResponseWriter, r *http.Request) { w.Write(payload) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	f := &GitHubReleaseFetcher{APIBase: srv.URL, assetURLRewrite: func(string) string { return srv.URL + "/asset.zip" }}
+	res, err := f.Fetch(context.Background(), manifest.AddonSpec{
+		Source: manifest.SourceGitHubRelease, Repo: "owner/repo", Version: "release/v1", Asset: "addon.zip",
+	})
+	require.NoError(t, err)
+	defer os.RemoveAll(res.Dir)
+	_, err = os.Stat(filepath.Join(res.Dir, "plugin.cfg"))
+	require.NoError(t, err)
+	require.Equal(t, "/repos/owner/repo/releases/tags/release%2Fv1", gotReleasePath)
 }

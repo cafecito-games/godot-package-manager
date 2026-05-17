@@ -29,6 +29,7 @@ func newInitCommand(opts *Options) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Create a starter addons.toml in the current directory",
+		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if dir == "" {
 				workingDir, err := os.Getwd()
@@ -46,7 +47,10 @@ func newInitCommand(opts *Options) *cobra.Command {
 			if err := os.WriteFile(path, []byte(starterManifest), 0o644); err != nil {
 				return &output.ManifestError{Err: err}
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Created %s\n", path)
+			verbosef(cmd, opts, "manifest: %s\n", path)
+			if !opts.Quiet {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Created %s\n", path)
+			}
 			return nil
 		},
 	}

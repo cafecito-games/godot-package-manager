@@ -13,17 +13,22 @@ func newInstallCommand(opts *Options) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install all addons declared in addons.toml",
+		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			discovered, addonManifest, err := loadProject(dir)
 			if err != nil {
 				return err
 			}
+			verbosef(cmd, opts, "project: %s\nmanifest: %s\nlockfile: %s\n", discovered.Root, discovered.ManifestPath, discovered.LockPath)
 			runner := NewRunner(discovered.AddonsDir, discovered.LockPath)
 			results, err := runner.InstallAddons(cmd.Context(), addonManifest, nil, ModeInstall)
 			if err != nil {
 				return err
 			}
 			return output.Render(cmd.OutOrStdout(), opts.JSON, results, func() {
+				if opts.Quiet {
+					return
+				}
 				for _, result := range results {
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "installed %s @ %s\n", result.Name, result.ResolvedVersion)
 				}

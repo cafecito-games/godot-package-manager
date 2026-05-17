@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/cafecito-games/godot-package-manager/internal/installer"
 	"github.com/cafecito-games/godot-package-manager/internal/manifest"
@@ -95,6 +96,9 @@ func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Mani
 			Checksum:        fetched.Checksum,
 			SpecHash:        spec.Hash(),
 		}
+		if err := lock.Save(r.LockPath); err != nil {
+			return nil, err
+		}
 		results = append(results, AddonResult{
 			Name:            spec.Name,
 			ResolvedVersion: fetched.ResolvedVersion,
@@ -111,9 +115,14 @@ func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Mani
 // all addons.
 func selectAddons(addonManifest *manifest.Manifest, names []string) []manifest.AddonSpec {
 	if len(names) == 0 {
-		out := make([]manifest.AddonSpec, 0, len(addonManifest.Addons))
-		for _, spec := range addonManifest.Addons {
-			out = append(out, spec)
+		sortedNames := make([]string, 0, len(addonManifest.Addons))
+		for name := range addonManifest.Addons {
+			sortedNames = append(sortedNames, name)
+		}
+		sort.Strings(sortedNames)
+		out := make([]manifest.AddonSpec, 0, len(sortedNames))
+		for _, name := range sortedNames {
+			out = append(out, addonManifest.Addons[name])
 		}
 		return out
 	}

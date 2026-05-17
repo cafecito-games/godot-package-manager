@@ -261,7 +261,8 @@ gpm install
 ### Archive sources
 
 Archives are fetched over plain HTTPS. Embed credentials in the URL if the host
-requires authentication. `gpm` does not manage a credential store.
+requires authentication. `gpm` does not manage a credential store. Archive
+downloads are capped at 512 MiB.
 
 ---
 

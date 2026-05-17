@@ -18,6 +18,7 @@ func newUpdateCommand(opts *Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			verbosef(cmd, opts, "project: %s\nmanifest: %s\nlockfile: %s\n", discovered.Root, discovered.ManifestPath, discovered.LockPath)
 			for _, name := range args {
 				if _, ok := addonManifest.Addons[name]; !ok {
 					return &UsageError{Err: fmt.Errorf("unknown addon %q", name)}
@@ -29,6 +30,9 @@ func newUpdateCommand(opts *Options) *cobra.Command {
 				return err
 			}
 			return output.Render(cmd.OutOrStdout(), opts.JSON, results, func() {
+				if opts.Quiet {
+					return
+				}
 				for _, result := range results {
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "updated %s @ %s\n", result.Name, result.ResolvedVersion)
 				}

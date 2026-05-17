@@ -1,8 +1,10 @@
 package installer
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,8 +106,11 @@ func resolveSourcePath(root, sourcePath string) (string, error) {
 	addonsDir := filepath.Join(root, "addons")
 	entries, err := os.ReadDir(addonsDir)
 	if err != nil {
-		// No addons/ directory: install from the fetched root.
-		return root, nil
+		if errors.Is(err, fs.ErrNotExist) {
+			// No addons/ directory: install from the fetched root.
+			return root, nil
+		}
+		return "", &output.InstallError{Err: fmt.Errorf("reading addons directory: %w", err)}
 	}
 	var directories []string
 	for _, entry := range entries {

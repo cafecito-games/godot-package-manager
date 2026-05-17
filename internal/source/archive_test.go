@@ -99,6 +99,41 @@ func TestArchiveFetchHTTPError(t *testing.T) {
 	require.ErrorAs(t, err, &fetchErr)
 }
 
+func TestArchiveFetchDetectsArchiveTypeFromURLPathWithQuery(t *testing.T) {
+	payload := zipBytes(t, map[string]string{"plugin.cfg": "[plugin]"})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(payload)
+	}))
+	defer srv.Close()
+
+	f := &ArchiveFetcher{}
+	res, err := f.Fetch(context.Background(), manifest.AddonSpec{
+		Source: manifest.SourceArchive, URL: srv.URL + "/ADDON.ZIP?token=secret",
+	})
+	require.NoError(t, err)
+	defer os.RemoveAll(res.Dir)
+	got, err := os.ReadFile(filepath.Join(res.Dir, "plugin.cfg"))
+	require.NoError(t, err)
+	require.Equal(t, "[plugin]", string(got))
+}
+
+func TestDownloadRejectsOversizedResponse(t *testing.T) {
+	oldMax := maxDownloadBytes
+	maxDownloadBytes = 4
+	defer func() { maxDownloadBytes = oldMax }()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("12345"))
+	}))
+	defer srv.Close()
+
+	_, err := download(context.Background(), srv.URL, nil)
+	require.Error(t, err)
+	var fetchErr *output.FetchError
+	require.ErrorAs(t, err, &fetchErr)
+	require.Contains(t, err.Error(), "exceeds maximum download size")
+}
+
 func TestSafeJoinRejectsTraversal(t *testing.T) {
 	base := t.TempDir()
 

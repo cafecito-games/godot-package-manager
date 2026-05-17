@@ -1,7 +1,9 @@
 package project
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -24,8 +26,18 @@ func Discover(startDir string) (*Project, error) {
 		return nil, &output.ManifestError{Err: err}
 	}
 	for {
-		if _, statErr := os.Stat(filepath.Join(dir, "project.godot")); statErr == nil {
+		projectFile := filepath.Join(dir, "project.godot")
+		info, statErr := os.Stat(projectFile)
+		if statErr == nil {
+			if !info.Mode().IsRegular() {
+				return nil, &output.ManifestError{
+					Err: fmt.Errorf("%s is not a regular file", projectFile),
+				}
+			}
 			return forRoot(dir), nil
+		}
+		if !errors.Is(statErr, fs.ErrNotExist) {
+			return nil, &output.ManifestError{Err: fmt.Errorf("checking %s: %w", projectFile, statErr)}
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {

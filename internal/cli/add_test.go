@@ -76,3 +76,26 @@ func TestAddRejectsBadSourceCombo(t *testing.T) {
 	var usageErr *UsageError
 	require.ErrorAs(t, err, &usageErr)
 }
+
+func TestAddFetchFailureDoesNotPersistManifestEntry(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "project.godot"), nil, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "addons.toml"), []byte("[addons]\n"), 0o644))
+
+	fetchErr := errors.New("fetch failed")
+	testFetcherFor = func(manifest.AddonSpec) (source.Fetcher, error) {
+		return nil, fetchErr
+	}
+	defer func() { testFetcherFor = nil }()
+
+	cmd := newAddCommand(&Options{})
+	cmd.SetArgs([]string{"--name", "x", "--source", "archive", "--url", "u", "--dir", dir})
+	err := cmd.Execute()
+	require.ErrorIs(t, err, fetchErr)
+
+	m, loadErr := manifest.Load(filepath.Join(dir, "addons.toml"))
+	require.NoError(t, loadErr)
+	require.NotContains(t, m.Addons, "x")
+	_, statErr := os.Stat(filepath.Join(dir, "addons", "x"))
+	require.True(t, os.IsNotExist(statErr))
+}
