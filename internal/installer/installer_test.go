@@ -159,3 +159,40 @@ func TestInstallRejectsSymlink(t *testing.T) {
 	var installErr *output.InstallError
 	require.ErrorAs(t, err, &installErr)
 }
+
+func TestInstallRecoversInterruptedBackup(t *testing.T) {
+	fetched := t.TempDir()
+	writeTree(t, fetched, map[string]string{"plugin.cfg": "new"})
+	addonsDir := t.TempDir()
+
+	// Simulate a crash mid-swap: the destination is gone and only the
+	// .gpm-backup copy survives.
+	writeTree(t, filepath.Join(addonsDir, "dlg.gpm-backup"), map[string]string{"plugin.cfg": "old"})
+
+	require.NoError(t, Install(source.FetchResult{Dir: fetched}, manifest.AddonSpec{Name: "dlg"}, addonsDir))
+
+	got, err := os.ReadFile(filepath.Join(addonsDir, "dlg", "plugin.cfg"))
+	require.NoError(t, err)
+	require.Equal(t, "new", string(got))
+
+	_, err = os.Stat(filepath.Join(addonsDir, "dlg.gpm-backup"))
+	require.True(t, os.IsNotExist(err), "leftover backup should be consumed")
+}
+
+func TestInstallDiscardsStaleBackupWhenDestinationPresent(t *testing.T) {
+	fetched := t.TempDir()
+	writeTree(t, fetched, map[string]string{"plugin.cfg": "new"})
+	addonsDir := t.TempDir()
+
+	writeTree(t, filepath.Join(addonsDir, "dlg"), map[string]string{"plugin.cfg": "current"})
+	writeTree(t, filepath.Join(addonsDir, "dlg.gpm-backup"), map[string]string{"plugin.cfg": "stale"})
+
+	require.NoError(t, Install(source.FetchResult{Dir: fetched}, manifest.AddonSpec{Name: "dlg"}, addonsDir))
+
+	got, err := os.ReadFile(filepath.Join(addonsDir, "dlg", "plugin.cfg"))
+	require.NoError(t, err)
+	require.Equal(t, "new", string(got))
+
+	_, err = os.Stat(filepath.Join(addonsDir, "dlg.gpm-backup"))
+	require.True(t, os.IsNotExist(err), "stale backup should be removed")
+}

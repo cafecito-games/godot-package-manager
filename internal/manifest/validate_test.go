@@ -53,9 +53,9 @@ func TestValidateRejectsMissingFields(t *testing.T) {
 
 func TestValidateAcceptsValidManifest(t *testing.T) {
 	m := &Manifest{Addons: map[string]AddonSpec{
-		"g": {Name: "g", Source: SourceGit, URL: "u", Version: "v1"},
+		"g": {Name: "g", Source: SourceGit, URL: "https://github.com/o/r.git", Version: "v1"},
 		"r": {Name: "r", Source: SourceGitHubRelease, Repo: "o/r", Version: "1.0"},
-		"a": {Name: "a", Source: SourceArchive, URL: "u"},
+		"a": {Name: "a", Source: SourceArchive, URL: "https://example.com/a.zip"},
 	}}
 	require.NoError(t, m.Validate())
 }
@@ -123,11 +123,83 @@ func TestValidateAcceptsNormalAddon(t *testing.T) {
 		"dialogue_manager": {
 			Name:       "dialogue_manager",
 			Source:     SourceGit,
-			URL:        "u",
+			URL:        "https://github.com/owner/dialogue.git",
 			Version:    "v1",
 			InstallAs:  "dialogue_manager",
 			SourcePath: "addons/dialogue_manager",
 		},
 	}}
 	require.NoError(t, m.Validate())
+}
+
+func TestValidateRejectsDangerousGitURLs(t *testing.T) {
+	cases := []string{
+		"ext::sh -c 'touch /tmp/pwned'",
+		"-oProxyCommand=evil",
+		"transport::address",
+	}
+	for _, badURL := range cases {
+		t.Run(badURL, func(t *testing.T) {
+			m := &Manifest{Addons: map[string]AddonSpec{
+				"x": {Name: "x", Source: SourceGit, URL: badURL, Version: "v1"},
+			}}
+			require.Error(t, m.Validate())
+		})
+	}
+}
+
+func TestValidateAcceptsSafeGitURLs(t *testing.T) {
+	cases := []string{
+		"https://github.com/owner/repo.git",
+		"ssh://git@github.com/owner/repo.git",
+		"git://example.com/repo.git",
+		"git@github.com:owner/repo.git",
+		"file:///srv/repos/addon.git",
+		"/local/path/repo",
+	}
+	for _, goodURL := range cases {
+		t.Run(goodURL, func(t *testing.T) {
+			m := &Manifest{Addons: map[string]AddonSpec{
+				"x": {Name: "x", Source: SourceGit, URL: goodURL, Version: "v1"},
+			}}
+			require.NoError(t, m.Validate())
+		})
+	}
+}
+
+func TestValidateRejectsLeadingDashGitVersion(t *testing.T) {
+	m := &Manifest{Addons: map[string]AddonSpec{
+		"x": {Name: "x", Source: SourceGit, URL: "https://github.com/o/r.git", Version: "--upload-pack=evil"},
+	}}
+	require.Error(t, m.Validate())
+}
+
+func TestValidateRejectsNonHTTPArchiveURL(t *testing.T) {
+	m := &Manifest{Addons: map[string]AddonSpec{
+		"x": {Name: "x", Source: SourceArchive, URL: "file:///etc/passwd"},
+	}}
+	require.Error(t, m.Validate())
+}
+
+func TestValidateChecksumField(t *testing.T) {
+	validDigest := "0000000000000000000000000000000000000000000000000000000000000000"
+
+	t.Run("valid digest accepted", func(t *testing.T) {
+		m := &Manifest{Addons: map[string]AddonSpec{
+			"x": {Name: "x", Source: SourceArchive, URL: "https://example.com/a.zip", Checksum: validDigest},
+		}}
+		require.NoError(t, m.Validate())
+	})
+	t.Run("malformed digest rejected", func(t *testing.T) {
+		m := &Manifest{Addons: map[string]AddonSpec{
+			"x": {Name: "x", Source: SourceArchive, URL: "https://example.com/a.zip", Checksum: "abc123"},
+		}}
+		require.Error(t, m.Validate())
+	})
+	t.Run("checksum on git source rejected", func(t *testing.T) {
+		m := &Manifest{Addons: map[string]AddonSpec{
+			"x": {Name: "x", Source: SourceGit, URL: "https://github.com/o/r.git", Version: "v1", Checksum: validDigest},
+		}}
+		require.Error(t, m.Validate())
+	})
 }

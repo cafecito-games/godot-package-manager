@@ -32,6 +32,11 @@ func Install(fetched source.FetchResult, spec manifest.AddonSpec, addonsDir stri
 		return err
 	}
 
+	backupPath := destination + ".gpm-backup"
+	if err := recoverBackup(destination, backupPath); err != nil {
+		return err
+	}
+
 	// Copy into a staging directory on the same filesystem so the final rename is atomic.
 	staging, err := os.MkdirTemp(addonsDir, ".gpm-staging-*")
 	if err != nil {
@@ -49,7 +54,6 @@ func Install(fetched source.FetchResult, spec manifest.AddonSpec, addonsDir stri
 	destinationExists := statErr == nil
 
 	if destinationExists {
-		backupPath := destination + ".gpm-backup"
 		if err := os.Rename(destination, backupPath); err != nil {
 			_ = os.RemoveAll(staging)
 			return &output.InstallError{Err: fmt.Errorf("could not back up existing addon: %w", err)}
@@ -68,6 +72,29 @@ func Install(fetched source.FetchResult, spec manifest.AddonSpec, addonsDir stri
 		}
 	}
 
+	return nil
+}
+
+// recoverBackup repairs the state left by a process that crashed mid-swap. If a
+// leftover `<destination>.gpm-backup` exists, it is restored when destination
+// is missing (the backup is the only surviving copy) or removed when
+// destination is present (the backup is stale).
+func recoverBackup(destination, backupPath string) error {
+	if _, err := os.Lstat(backupPath); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return &output.InstallError{Err: err}
+	}
+	if _, err := os.Stat(destination); errors.Is(err, fs.ErrNotExist) {
+		if err := os.Rename(backupPath, destination); err != nil {
+			return &output.InstallError{Err: fmt.Errorf("restoring interrupted addon backup: %w", err)}
+		}
+		return nil
+	}
+	if err := os.RemoveAll(backupPath); err != nil {
+		return &output.InstallError{Err: err}
+	}
 	return nil
 }
 

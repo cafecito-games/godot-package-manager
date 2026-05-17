@@ -118,20 +118,86 @@ func TestArchiveFetchDetectsArchiveTypeFromURLPathWithQuery(t *testing.T) {
 }
 
 func TestDownloadRejectsOversizedResponse(t *testing.T) {
-	oldMax := maxDownloadBytes
-	maxDownloadBytes = 4
-	defer func() { maxDownloadBytes = oldMax }()
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("12345"))
 	}))
 	defer srv.Close()
 
-	_, err := download(context.Background(), srv.URL, nil)
+	_, err := download(context.Background(), nil, srv.URL, nil, 4)
 	require.Error(t, err)
 	var fetchErr *output.FetchError
 	require.ErrorAs(t, err, &fetchErr)
 	require.Contains(t, err.Error(), "exceeds maximum download size")
+}
+
+func TestDownloadToFileRejectsOversizedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("12345"))
+	}))
+	defer srv.Close()
+
+	_, _, err := downloadToFile(context.Background(), nil, srv.URL, nil, 4)
+	require.Error(t, err)
+	var fetchErr *output.FetchError
+	require.ErrorAs(t, err, &fetchErr)
+	require.Contains(t, err.Error(), "exceeds maximum download size")
+}
+
+func TestArchiveFetchRejectsDecompressionBomb(t *testing.T) {
+	// Lower the cap so the test stays fast; the production value is far larger.
+	originalCap := maxExtractedBytes
+	maxExtractedBytes = 1 << 20
+	defer func() { maxExtractedBytes = originalCap }()
+
+	// A zip whose single entry decompresses to more than maxExtractedBytes.
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create("bomb.bin")
+	require.NoError(t, err)
+	chunk := make([]byte, 64<<10) // highly compressible zeros
+	for written := int64(0); written <= maxExtractedBytes; written += int64(len(chunk)) {
+		_, err = w.Write(chunk)
+		require.NoError(t, err)
+	}
+	require.NoError(t, zw.Close())
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(buf.Bytes())
+	}))
+	defer srv.Close()
+
+	f := &ArchiveFetcher{}
+	_, err = f.Fetch(context.Background(), manifest.AddonSpec{
+		Source: manifest.SourceArchive, URL: srv.URL + "/bomb.zip",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "maximum extracted size")
+}
+
+func TestArchiveExtractRejectsSymlinkEntry(t *testing.T) {
+	var buf bytes.Buffer
+	gzipWriter := gzip.NewWriter(&buf)
+	tarWriter := tar.NewWriter(gzipWriter)
+	require.NoError(t, tarWriter.WriteHeader(&tar.Header{
+		Name:     "evil-link",
+		Typeflag: tar.TypeSymlink,
+		Linkname: "/etc/passwd",
+		Mode:     0o777,
+	}))
+	require.NoError(t, tarWriter.Close())
+	require.NoError(t, gzipWriter.Close())
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(buf.Bytes())
+	}))
+	defer srv.Close()
+
+	f := &ArchiveFetcher{}
+	_, err := f.Fetch(context.Background(), manifest.AddonSpec{
+		Source: manifest.SourceArchive, URL: srv.URL + "/x.tar.gz",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "symlink")
 }
 
 func TestSafeJoinRejectsTraversal(t *testing.T) {

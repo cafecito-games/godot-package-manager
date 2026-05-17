@@ -27,6 +27,10 @@ type AddonSpec struct {
 	Asset      string     `toml:"asset,omitempty"`
 	SourcePath string     `toml:"source_path,omitempty"`
 	InstallAs  string     `toml:"install_as,omitempty"`
+	// Checksum, when set, is the expected SHA-256 (64 lowercase hex digits) of
+	// the downloaded archive or release asset. It is verified on every fetch,
+	// including the first, for archive and github-release sources.
+	Checksum string `toml:"checksum,omitempty"`
 }
 
 // Manifest is the parsed contents of addons.toml.
@@ -45,8 +49,8 @@ func (s AddonSpec) InstallName() string {
 // Hash returns a stable hash of the spec's resolvable fields, used to detect
 // drift between addons.toml and addons.lock.
 func (s AddonSpec) Hash() string {
-	representation := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s",
-		s.Source, s.URL, s.Repo, s.Version, s.Asset, s.SourcePath, s.InstallAs)
+	representation := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s",
+		s.Source, s.URL, s.Repo, s.Version, s.Asset, s.SourcePath, s.InstallAs, s.Checksum)
 	checksum := sha256.Sum256([]byte(representation))
 	return hex.EncodeToString(checksum[:])
 }

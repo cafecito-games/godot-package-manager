@@ -3,7 +3,6 @@ package source
 import (
 	"archive/tar"
 	"archive/zip"
-	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -22,42 +21,66 @@ import (
 	"github.com/cafecito-games/godot-package-manager/internal/output"
 )
 
-// ArchiveFetcher downloads and extracts a plain zip or tarball URL.
-type ArchiveFetcher struct{}
-
-var (
-	maxDownloadBytes int64 = 512 << 20
-	httpClient             = &http.Client{Timeout: 60 * time.Second}
+const (
+	// defaultMaxDownloadBytes caps the size of a downloaded (compressed) payload.
+	defaultMaxDownloadBytes int64 = 512 << 20
+	// httpTimeout bounds a single HTTP request.
+	httpTimeout = 60 * time.Second
 )
+
+// Extraction limits guard against decompression-bomb disk exhaustion. They are
+// variables rather than constants only so tests can exercise the limits cheaply.
+var (
+	// maxExtractedBytes caps the total uncompressed size of an extracted archive.
+	maxExtractedBytes int64 = 1 << 30
+	// maxExtractedFiles caps the number of entries an archive may contain.
+	maxExtractedFiles = 20000
+)
+
+// defaultHTTPClient is the shared client used when a fetcher does not provide
+// its own. It is treated as immutable.
+var defaultHTTPClient = &http.Client{Timeout: httpTimeout}
+
+// ArchiveFetcher downloads and extracts a plain zip or tarball URL.
+type ArchiveFetcher struct {
+	// client overrides the HTTP client; nil uses defaultHTTPClient.
+	client *http.Client
+	// maxBytes overrides the download size cap; 0 uses defaultMaxDownloadBytes.
+	maxBytes int64
+}
 
 // Fetch downloads spec.URL, extracts it into a new temp directory, and reports
 // the archive's SHA-256 checksum.
 func (f *ArchiveFetcher) Fetch(ctx context.Context, spec manifest.AddonSpec) (FetchResult, error) {
-	data, err := download(ctx, spec.URL, nil)
+	archivePath, checksum, err := downloadToFile(ctx, f.client, spec.URL, nil, f.maxBytes)
 	if err != nil {
 		return FetchResult{}, err
 	}
+	defer func() { _ = os.Remove(archivePath) }()
+
 	dir, err := os.MkdirTemp("", "gpm-archive-*")
 	if err != nil {
 		return FetchResult{}, &output.FetchError{Err: err}
 	}
-	if err := extractArchive(spec.URL, data, dir); err != nil {
+	if err := extractArchive(spec.URL, archivePath, dir); err != nil {
 		_ = os.RemoveAll(dir)
 		return FetchResult{}, err
 	}
-	sum := sha256.Sum256(data)
 	return FetchResult{
 		Dir:             dir,
 		ResolvedVersion: spec.Version,
-		Checksum:        hex.EncodeToString(sum[:]),
+		Checksum:        checksum,
 	}, nil
 }
 
-// download performs an HTTP GET and returns the response body. header, if
-// non-nil, is applied to the request (used by the GitHub release fetcher for
-// auth headers).
-func download(ctx context.Context, url string, header http.Header) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// httpGet issues a GET request and returns the response on a 200 status. The
+// caller must close the response body. header, if non-nil, is applied to the
+// request.
+func httpGet(ctx context.Context, client *http.Client, rawURL string, header http.Header) (*http.Response, error) {
+	if client == nil {
+		client = defaultHTTPClient
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, &output.FetchError{Err: err}
 	}
@@ -66,33 +89,86 @@ func download(ctx context.Context, url string, header http.Header) ([]byte, erro
 			req.Header.Add(key, value)
 		}
 	}
-	resp, err := httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
-		return nil, &output.FetchError{Err: fmt.Errorf("downloading %s: %w", url, err)}
+		return nil, &output.FetchError{Err: fmt.Errorf("downloading %s: %w", rawURL, err)}
+	}
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		return nil, &output.FetchError{Err: fmt.Errorf("downloading %s: HTTP %d", rawURL, resp.StatusCode)}
+	}
+	return resp, nil
+}
+
+// download performs an HTTP GET and returns the response body fully in memory.
+// It is intended for small payloads such as API JSON. maxBytes <= 0 uses the
+// default cap.
+func download(ctx context.Context, client *http.Client, rawURL string, header http.Header, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxDownloadBytes
+	}
+	resp, err := httpGet(ctx, client, rawURL, header)
+	if err != nil {
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, &output.FetchError{Err: fmt.Errorf("downloading %s: HTTP %d", url, resp.StatusCode)}
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadBytes+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
 		return nil, &output.FetchError{Err: err}
 	}
-	if int64(len(body)) > maxDownloadBytes {
-		return nil, &output.FetchError{Err: fmt.Errorf("downloading %s: response exceeds maximum download size of %d bytes", url, maxDownloadBytes)}
+	if int64(len(body)) > maxBytes {
+		return nil, &output.FetchError{Err: fmt.Errorf(
+			"downloading %s: response exceeds maximum download size of %d bytes", rawURL, maxBytes)}
 	}
 	return body, nil
 }
 
-// extractArchive extracts data into dir, choosing zip vs tar.gz based on
-// nameHint's file extension.
-func extractArchive(nameHint string, data []byte, dir string) error {
+// downloadToFile streams an HTTP GET response to a temporary file, computing
+// its SHA-256 along the way. It returns the file path and the hex-encoded
+// checksum; the caller is responsible for removing the file. maxBytes <= 0 uses
+// the default cap.
+func downloadToFile(ctx context.Context, client *http.Client, rawURL string, header http.Header, maxBytes int64) (string, string, error) {
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxDownloadBytes
+	}
+	resp, err := httpGet(ctx, client, rawURL, header)
+	if err != nil {
+		return "", "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	tmp, err := os.CreateTemp("", "gpm-download-*")
+	if err != nil {
+		return "", "", &output.FetchError{Err: err}
+	}
+	hasher := sha256.New()
+	written, copyErr := io.Copy(io.MultiWriter(tmp, hasher), io.LimitReader(resp.Body, maxBytes+1))
+	closeErr := tmp.Close()
+	if copyErr != nil {
+		_ = os.Remove(tmp.Name())
+		return "", "", &output.FetchError{Err: copyErr}
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmp.Name())
+		return "", "", &output.FetchError{Err: closeErr}
+	}
+	if written > maxBytes {
+		_ = os.Remove(tmp.Name())
+		return "", "", &output.FetchError{Err: fmt.Errorf(
+			"downloading %s: response exceeds maximum download size of %d bytes", rawURL, maxBytes)}
+	}
+	return tmp.Name(), hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+// extractArchive extracts the archive at archivePath into dir, choosing zip vs
+// tar.gz based on nameHint's file extension.
+func extractArchive(nameHint, archivePath, dir string) error {
 	archiveName := archiveNameForDetection(nameHint)
 	switch {
 	case strings.HasSuffix(archiveName, ".zip"):
-		return extractZip(data, dir)
+		return extractZip(archivePath, dir)
 	case strings.HasSuffix(archiveName, ".tar.gz"), strings.HasSuffix(archiveName, ".tgz"):
-		return extractTarGz(data, dir)
+		return extractTarGz(archivePath, dir)
 	default:
 		return &output.FetchError{Err: fmt.Errorf("unsupported archive type: %s", nameHint)}
 	}
@@ -105,21 +181,56 @@ func archiveNameForDetection(nameHint string) string {
 	return strings.ToLower(nameHint)
 }
 
-func extractZip(data []byte, dir string) error {
-	zipReader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+// extractGuard enforces per-archive limits on entry count and total
+// uncompressed size.
+type extractGuard struct {
+	files int
+	bytes int64
+}
+
+func (g *extractGuard) addFile() error {
+	g.files++
+	if g.files > maxExtractedFiles {
+		return &output.InstallError{Err: fmt.Errorf(
+			"archive contains more than %d entries", maxExtractedFiles)}
+	}
+	return nil
+}
+
+func (g *extractGuard) addBytes(n int64) error {
+	g.bytes += n
+	if g.bytes > maxExtractedBytes {
+		return &output.InstallError{Err: fmt.Errorf(
+			"archive expands beyond the maximum extracted size of %d bytes", maxExtractedBytes)}
+	}
+	return nil
+}
+
+func extractZip(archivePath, dir string) error {
+	reader, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return &output.InstallError{Err: err}
 	}
-	for _, zipFile := range zipReader.File {
+	defer func() { _ = reader.Close() }()
+
+	guard := &extractGuard{}
+	for _, zipFile := range reader.File {
 		dest, err := safeJoin(dir, zipFile.Name)
 		if err != nil {
 			return err
+		}
+		if zipFile.Mode()&os.ModeSymlink != 0 {
+			return &output.InstallError{Err: fmt.Errorf(
+				"archive contains an unsupported symlink entry: %s", zipFile.Name)}
 		}
 		if zipFile.FileInfo().IsDir() {
 			if err := os.MkdirAll(dest, 0o755); err != nil {
 				return &output.InstallError{Err: err}
 			}
 			continue
+		}
+		if err := guard.addFile(); err != nil {
+			return err
 		}
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return &output.InstallError{Err: err}
@@ -128,7 +239,7 @@ func extractZip(data []byte, dir string) error {
 		if err != nil {
 			return &output.InstallError{Err: err}
 		}
-		err = writeFile(dest, readCloser, zipFile.Mode())
+		err = writeFile(dest, readCloser, zipFile.Mode(), guard)
 		_ = readCloser.Close()
 		if err != nil {
 			return err
@@ -137,12 +248,19 @@ func extractZip(data []byte, dir string) error {
 	return nil
 }
 
-func extractTarGz(data []byte, dir string) error {
-	gzipReader, err := gzip.NewReader(bytes.NewReader(data))
+func extractTarGz(archivePath, dir string) error {
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return &output.InstallError{Err: err}
+	}
+	defer func() { _ = file.Close() }()
+	gzipReader, err := gzip.NewReader(file)
 	if err != nil {
 		return &output.InstallError{Err: err}
 	}
 	defer func() { _ = gzipReader.Close() }()
+
+	guard := &extractGuard{}
 	tarReader := tar.NewReader(gzipReader)
 	for {
 		header, err := tarReader.Next()
@@ -162,12 +280,18 @@ func extractTarGz(data []byte, dir string) error {
 				return &output.InstallError{Err: err}
 			}
 		case tar.TypeReg:
+			if err := guard.addFile(); err != nil {
+				return err
+			}
 			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 				return &output.InstallError{Err: err}
 			}
-			if err := writeFile(dest, tarReader, os.FileMode(header.Mode)); err != nil {
+			if err := writeFile(dest, tarReader, os.FileMode(header.Mode), guard); err != nil {
 				return err
 			}
+		case tar.TypeSymlink, tar.TypeLink:
+			return &output.InstallError{Err: fmt.Errorf(
+				"archive contains an unsupported symlink entry: %s", header.Name)}
 		}
 	}
 }
@@ -182,14 +306,18 @@ func safeJoin(base, name string) (string, error) {
 	return dest, nil
 }
 
-func writeFile(dest string, reader io.Reader, mode os.FileMode) error {
+// writeFile writes reader into dest, enforcing the guard's total-size cap so a
+// single entry cannot expand the archive past maxExtractedBytes.
+func writeFile(dest string, reader io.Reader, mode os.FileMode, guard *extractGuard) error {
 	out, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode|0o200)
 	if err != nil {
 		return &output.InstallError{Err: err}
 	}
 	defer func() { _ = out.Close() }()
-	if _, err := io.Copy(out, reader); err != nil {
+	remaining := maxExtractedBytes - guard.bytes
+	written, err := io.Copy(out, io.LimitReader(reader, remaining+1))
+	if err != nil {
 		return &output.InstallError{Err: err}
 	}
-	return nil
+	return guard.addBytes(written)
 }

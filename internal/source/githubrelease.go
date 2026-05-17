@@ -2,8 +2,6 @@ package source
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -22,6 +20,8 @@ const defaultGitHubAPIBase = "https://api.github.com"
 type GitHubReleaseFetcher struct {
 	// APIBase overrides the GitHub API root; empty means the public API.
 	APIBase string
+	// client overrides the HTTP client; nil uses defaultHTTPClient.
+	client *http.Client
 	// assetURLRewrite, if set, rewrites an asset download URL (used in tests).
 	assetURLRewrite func(string) string
 }
@@ -54,7 +54,7 @@ func (f *GitHubReleaseFetcher) Fetch(ctx context.Context, spec manifest.AddonSpe
 		url.PathEscape(repoParts[0]),
 		url.PathEscape(repoParts[1]),
 		url.PathEscape(spec.Version))
-	body, err := download(ctx, apiURL, githubHeader("application/vnd.github+json"))
+	body, err := download(ctx, f.client, apiURL, githubHeader("application/vnd.github+json"), 0)
 	if err != nil {
 		return FetchResult{}, err
 	}
@@ -72,23 +72,24 @@ func (f *GitHubReleaseFetcher) Fetch(ctx context.Context, spec manifest.AddonSpe
 	}
 	// Asset bytes are served from the asset's API URL; the octet-stream Accept
 	// header tells GitHub to return the binary rather than the asset's JSON.
-	data, err := download(ctx, downloadURL, githubHeader("application/octet-stream"))
+	archivePath, checksum, err := downloadToFile(ctx, f.client, downloadURL, githubHeader("application/octet-stream"), 0)
 	if err != nil {
 		return FetchResult{}, err
 	}
+	defer func() { _ = os.Remove(archivePath) }()
+
 	dir, err := os.MkdirTemp("", "gpm-ghrel-*")
 	if err != nil {
 		return FetchResult{}, &output.FetchError{Err: err}
 	}
-	if err := extractArchive(asset.Name, data, dir); err != nil {
+	if err := extractArchive(asset.Name, archivePath, dir); err != nil {
 		_ = os.RemoveAll(dir)
 		return FetchResult{}, err
 	}
-	sum := sha256.Sum256(data)
 	return FetchResult{
 		Dir:             dir,
 		ResolvedVersion: spec.Version,
-		Checksum:        hex.EncodeToString(sum[:]),
+		Checksum:        checksum,
 	}, nil
 }
 

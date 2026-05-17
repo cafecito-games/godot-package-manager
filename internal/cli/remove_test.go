@@ -13,7 +13,7 @@ func TestRemoveDeletesAddon(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "project.godot"), nil, 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "addons.toml"),
-		[]byte("[addons]\n[addons.x]\nsource = \"archive\"\nurl = \"u\"\n"), 0o644))
+		[]byte("[addons]\n[addons.x]\nsource = \"archive\"\nurl = \"https://example.com/x.zip\"\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "addons.lock"),
 		[]byte("[addons]\n[addons.x]\nresolved_version = \"abc\"\nsource_path = \"\"\nspec_hash = \"h\"\n"), 0o644))
 	installed := filepath.Join(dir, "addons", "x")

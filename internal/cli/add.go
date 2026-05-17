@@ -60,6 +60,11 @@ func newAddCommand(opts *Options) *cobra.Command {
 				return &UsageError{Err: err}
 			}
 			addonManifest.Addons[spec.Name] = spec
+			// Persist the manifest before installing so the success path has no
+			// trailing fallible write. A failed install rolls the entry back.
+			if err := addonManifest.Save(discovered.ManifestPath); err != nil {
+				return err
+			}
 			runner := NewRunner(discovered.AddonsDir, discovered.LockPath)
 			if testFetcherFor != nil {
 				runner.FetcherFor = testFetcherFor
@@ -67,9 +72,9 @@ func newAddCommand(opts *Options) *cobra.Command {
 			results, err := runner.InstallAddons(cmd.Context(), addonManifest, []string{spec.Name}, ModeInstall)
 			if err != nil {
 				delete(addonManifest.Addons, spec.Name)
-				return err
-			}
-			if err := addonManifest.Save(discovered.ManifestPath); err != nil {
+				if rollbackErr := addonManifest.Save(discovered.ManifestPath); rollbackErr != nil {
+					return errors.Join(err, rollbackErr)
+				}
 				return err
 			}
 			return output.Render(cmd.OutOrStdout(), opts.JSON, results, func() {
