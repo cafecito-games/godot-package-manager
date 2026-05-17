@@ -29,3 +29,14 @@ func TestDiscoverNotFound(t *testing.T) {
 	var manifestErr *output.ManifestError
 	require.ErrorAs(t, err, &manifestErr)
 }
+
+func TestDiscoverRejectsDirectoryNamedProjectGodot(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, "project.godot"), 0o755))
+
+	_, err := Discover(root)
+	require.Error(t, err)
+	var manifestErr *output.ManifestError
+	require.ErrorAs(t, err, &manifestErr)
+	require.Contains(t, err.Error(), "not a regular file")
+}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"strings"
@@ -40,7 +41,15 @@ func (f *GitHubReleaseFetcher) Fetch(ctx context.Context, spec manifest.AddonSpe
 	if base == "" {
 		base = defaultGitHubAPIBase
 	}
-	apiURL := fmt.Sprintf("%s/repos/%s/releases/tags/%s", base, spec.Repo, spec.Version)
+	repoParts := strings.Split(spec.Repo, "/")
+	if len(repoParts) != 2 || repoParts[0] == "" || repoParts[1] == "" {
+		return FetchResult{}, &output.FetchError{Err: fmt.Errorf("github-release repo %q must be owner/repo", spec.Repo)}
+	}
+	apiURL := fmt.Sprintf("%s/repos/%s/%s/releases/tags/%s",
+		strings.TrimRight(base, "/"),
+		url.PathEscape(repoParts[0]),
+		url.PathEscape(repoParts[1]),
+		url.PathEscape(spec.Version))
 	body, err := download(ctx, apiURL, githubHeader())
 	if err != nil {
 		return FetchResult{}, err

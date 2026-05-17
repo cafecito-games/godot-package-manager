@@ -28,11 +28,13 @@ func newAddCommand(opts *Options) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add",
 		Short: "Add an addon to addons.toml and install it",
+		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			discovered, addonManifest, err := loadProject(flagValues.dir)
 			if err != nil {
 				return err
 			}
+			verbosef(cmd, opts, "project: %s\nmanifest: %s\nlockfile: %s\n", discovered.Root, discovered.ManifestPath, discovered.LockPath)
 			var spec manifest.AddonSpec
 			// With neither identifying flag set, fall back to the interactive wizard.
 			if flagValues.name == "" && flagValues.source == "" {
@@ -58,18 +60,22 @@ func newAddCommand(opts *Options) *cobra.Command {
 				return &UsageError{Err: err}
 			}
 			addonManifest.Addons[spec.Name] = spec
-			if err := addonManifest.Save(discovered.ManifestPath); err != nil {
-				return err
-			}
 			runner := NewRunner(discovered.AddonsDir, discovered.LockPath)
 			if testFetcherFor != nil {
 				runner.FetcherFor = testFetcherFor
 			}
 			results, err := runner.InstallAddons(cmd.Context(), addonManifest, []string{spec.Name}, ModeInstall)
 			if err != nil {
+				delete(addonManifest.Addons, spec.Name)
+				return err
+			}
+			if err := addonManifest.Save(discovered.ManifestPath); err != nil {
 				return err
 			}
 			return output.Render(cmd.OutOrStdout(), opts.JSON, results, func() {
+				if opts.Quiet {
+					return
+				}
 				for _, result := range results {
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "added and installed %s\n", result.Name)
 				}

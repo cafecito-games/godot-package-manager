@@ -12,9 +12,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/cafecito-games/godot-package-manager/internal/manifest"
 	"github.com/cafecito-games/godot-package-manager/internal/output"
@@ -22,6 +24,11 @@ import (
 
 // ArchiveFetcher downloads and extracts a plain zip or tarball URL.
 type ArchiveFetcher struct{}
+
+var (
+	maxDownloadBytes int64 = 512 << 20
+	httpClient             = &http.Client{Timeout: 60 * time.Second}
+)
 
 // Fetch downloads spec.URL, extracts it into a new temp directory, and reports
 // the archive's SHA-256 checksum.
@@ -59,7 +66,7 @@ func download(ctx context.Context, url string, header http.Header) ([]byte, erro
 			req.Header.Add(key, value)
 		}
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, &output.FetchError{Err: fmt.Errorf("downloading %s: %w", url, err)}
 	}
@@ -67,9 +74,12 @@ func download(ctx context.Context, url string, header http.Header) ([]byte, erro
 	if resp.StatusCode != http.StatusOK {
 		return nil, &output.FetchError{Err: fmt.Errorf("downloading %s: HTTP %d", url, resp.StatusCode)}
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadBytes+1))
 	if err != nil {
 		return nil, &output.FetchError{Err: err}
+	}
+	if int64(len(body)) > maxDownloadBytes {
+		return nil, &output.FetchError{Err: fmt.Errorf("downloading %s: response exceeds maximum download size of %d bytes", url, maxDownloadBytes)}
 	}
 	return body, nil
 }
@@ -77,14 +87,22 @@ func download(ctx context.Context, url string, header http.Header) ([]byte, erro
 // extractArchive extracts data into dir, choosing zip vs tar.gz based on
 // nameHint's file extension.
 func extractArchive(nameHint string, data []byte, dir string) error {
+	archiveName := archiveNameForDetection(nameHint)
 	switch {
-	case strings.HasSuffix(nameHint, ".zip"):
+	case strings.HasSuffix(archiveName, ".zip"):
 		return extractZip(data, dir)
-	case strings.HasSuffix(nameHint, ".tar.gz"), strings.HasSuffix(nameHint, ".tgz"):
+	case strings.HasSuffix(archiveName, ".tar.gz"), strings.HasSuffix(archiveName, ".tgz"):
 		return extractTarGz(data, dir)
 	default:
 		return &output.FetchError{Err: fmt.Errorf("unsupported archive type: %s", nameHint)}
 	}
+}
+
+func archiveNameForDetection(nameHint string) string {
+	if parsed, err := url.Parse(nameHint); err == nil && parsed.Path != "" {
+		return strings.ToLower(parsed.Path)
+	}
+	return strings.ToLower(nameHint)
 }
 
 func extractZip(data []byte, dir string) error {

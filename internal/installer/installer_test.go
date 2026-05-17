@@ -61,6 +61,17 @@ func TestInstallAmbiguousFails(t *testing.T) {
 	require.ErrorAs(t, err, &installErr)
 }
 
+func TestInstallReturnsErrorWhenAddonsPathCannotBeRead(t *testing.T) {
+	fetched := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(fetched, "addons"), []byte("not a directory"), 0o644))
+
+	err := Install(source.FetchResult{Dir: fetched}, manifest.AddonSpec{Name: "dlg"}, t.TempDir())
+	require.Error(t, err)
+	var installErr *output.InstallError
+	require.ErrorAs(t, err, &installErr)
+	require.Contains(t, err.Error(), "reading addons directory")
+}
+
 func TestInstallBadExplicitSourcePath(t *testing.T) {
 	fetched := t.TempDir()
 	writeTree(t, fetched, map[string]string{"addons/dlg/plugin.cfg": "[plugin]"})

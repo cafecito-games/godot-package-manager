@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/cafecito-games/godot-package-manager/internal/manifest"
+	"github.com/cafecito-games/godot-package-manager/internal/output"
 	"github.com/cafecito-games/godot-package-manager/internal/source"
 	"github.com/stretchr/testify/require"
 )
@@ -101,4 +102,55 @@ func TestInstallAddonsFetcherError(t *testing.T) {
 
 	_, err := r.InstallAddons(context.Background(), m, nil, ModeInstall)
 	require.ErrorIs(t, err, fetcherError)
+}
+
+func TestInstallAddonsPersistsSuccessfulLockBeforeLaterFailure(t *testing.T) {
+	projectRoot := t.TempDir()
+	addonsDir := filepath.Join(projectRoot, "addons")
+	lockPath := filepath.Join(projectRoot, "addons.lock")
+
+	m := &manifest.Manifest{Addons: map[string]manifest.AddonSpec{
+		"ok":  {Name: "ok", Source: manifest.SourceArchive, URL: "u-ok"},
+		"bad": {Name: "bad", Source: manifest.SourceArchive, URL: "u-bad"},
+	}}
+
+	fetcherError := errors.New("fetch failed")
+	r := &Runner{
+		AddonsDir: addonsDir,
+		LockPath:  lockPath,
+		FetcherFor: func(spec manifest.AddonSpec) (source.Fetcher, error) {
+			if spec.Name == "bad" {
+				return nil, &output.FetchError{Err: fetcherError}
+			}
+			return fakeFetcher{version: "1.0", checksum: "abc123"}, nil
+		},
+	}
+
+	_, err := r.InstallAddons(context.Background(), m, []string{"ok", "bad"}, ModeUpdate)
+	require.ErrorIs(t, err, fetcherError)
+
+	_, err = os.Stat(filepath.Join(addonsDir, "ok", "plugin.cfg"))
+	require.NoError(t, err, "successful addon should remain installed")
+
+	lock, err := manifest.LoadLock(lockPath)
+	require.NoError(t, err)
+	require.Equal(t, "1.0", lock.Addons["ok"].ResolvedVersion)
+	require.Equal(t, m.Addons["ok"].Hash(), lock.Addons["ok"].SpecHash)
+	_, badLocked := lock.Addons["bad"]
+	require.False(t, badLocked, "failed addon should not be added to the lockfile")
+}
+
+func TestInstallAddonsSelectsAllAddonsInNameOrder(t *testing.T) {
+	m := &manifest.Manifest{Addons: map[string]manifest.AddonSpec{
+		"zeta":  {Name: "zeta", Source: manifest.SourceArchive, URL: "u-z"},
+		"alpha": {Name: "alpha", Source: manifest.SourceArchive, URL: "u-a"},
+		"mid":   {Name: "mid", Source: manifest.SourceArchive, URL: "u-m"},
+	}}
+
+	selected := selectAddons(m, nil)
+	require.Equal(t, []string{"alpha", "mid", "zeta"}, []string{
+		selected[0].Name,
+		selected[1].Name,
+		selected[2].Name,
+	})
 }

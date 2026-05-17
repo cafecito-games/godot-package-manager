@@ -24,11 +24,13 @@ func newListCommand(opts *Options) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List addons declared in addons.toml",
+		Args:  usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			discovered, addonManifest, err := loadProject(dir)
 			if err != nil {
 				return err
 			}
+			verbosef(cmd, opts, "project: %s\nmanifest: %s\nlockfile: %s\n", discovered.Root, discovered.ManifestPath, discovered.LockPath)
 			names := make([]string, 0, len(addonManifest.Addons))
 			for name := range addonManifest.Addons {
 				names = append(names, name)
@@ -49,6 +51,9 @@ func newListCommand(opts *Options) *cobra.Command {
 				})
 			}
 			return output.Render(cmd.OutOrStdout(), opts.JSON, listings, func() {
+				if opts.Quiet {
+					return
+				}
 				for _, listing := range listings {
 					mark := " "
 					if listing.Installed {
