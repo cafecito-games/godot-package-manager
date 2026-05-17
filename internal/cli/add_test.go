@@ -22,7 +22,7 @@ func TestAddNonInteractive(t *testing.T) {
 	}
 	defer func() { testFetcherFor = nil }()
 
-	cmd.SetArgs([]string{"--name", "x", "--source", "archive", "--url", "u", "--dir", dir})
+	cmd.SetArgs([]string{"--name", "x", "--source", "archive", "--url", "https://example.com/x.zip", "--dir", dir})
 	require.NoError(t, cmd.Execute())
 
 	m, err := manifest.Load(filepath.Join(dir, "addons.toml"))
@@ -36,9 +36,9 @@ func TestAddRejectsDuplicate(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "project.godot"), nil, 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "addons.toml"),
-		[]byte("[addons]\n[addons.x]\nsource=\"archive\"\nurl=\"u\"\n"), 0o644))
+		[]byte("[addons]\n[addons.x]\nsource=\"archive\"\nurl=\"https://example.com/x.zip\"\n"), 0o644))
 	cmd := newAddCommand(&Options{})
-	cmd.SetArgs([]string{"--name", "x", "--source", "archive", "--url", "u", "--dir", dir})
+	cmd.SetArgs([]string{"--name", "x", "--source", "archive", "--url", "https://example.com/x.zip", "--dir", dir})
 	err := cmd.Execute()
 	require.Error(t, err)
 	var usageErr *UsageError
@@ -89,7 +89,7 @@ func TestAddFetchFailureDoesNotPersistManifestEntry(t *testing.T) {
 	defer func() { testFetcherFor = nil }()
 
 	cmd := newAddCommand(&Options{})
-	cmd.SetArgs([]string{"--name", "x", "--source", "archive", "--url", "u", "--dir", dir})
+	cmd.SetArgs([]string{"--name", "x", "--source", "archive", "--url", "https://example.com/x.zip", "--dir", dir})
 	err := cmd.Execute()
 	require.ErrorIs(t, err, fetchErr)
 

@@ -23,6 +23,14 @@ type GitFetcher struct{}
 // via smart-fetch), it falls back to a full fetch and then checks out the
 // exact SHA or ref.
 func (f *GitFetcher) Fetch(ctx context.Context, spec manifest.AddonSpec) (FetchResult, error) {
+	// Defense in depth: the manifest validator already rejects these, but the
+	// fetcher must not pass a value that git could parse as a command-line flag.
+	if strings.HasPrefix(spec.URL, "-") {
+		return FetchResult{}, &output.FetchError{Err: fmt.Errorf("git url %q must not begin with '-'", spec.URL)}
+	}
+	if strings.HasPrefix(spec.Version, "-") {
+		return FetchResult{}, &output.FetchError{Err: fmt.Errorf("git version %q must not begin with '-'", spec.Version)}
+	}
 	if _, err := exec.LookPath("git"); err != nil {
 		return FetchResult{}, &output.FetchError{Err: fmt.Errorf("git binary not found on PATH")}
 	}
@@ -67,9 +75,19 @@ func (f *GitFetcher) Fetch(ctx context.Context, spec manifest.AddonSpec) (FetchR
 	return FetchResult{Dir: dir, ResolvedVersion: strings.TrimSpace(stdout)}, nil
 }
 
-func runGit(ctx context.Context, directory string, args ...string) error {
-	cmd := exec.CommandContext(ctx, "git", args...)
+// gitCommand builds a git invocation. It disables the `ext::` remote helper
+// (which would let a crafted URL execute arbitrary commands) and credential
+// prompting so a fetch cannot block waiting on terminal input.
+func gitCommand(ctx context.Context, directory string, args ...string) *exec.Cmd {
+	full := append([]string{"-c", "protocol.ext.allow=never"}, args...)
+	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = directory
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	return cmd
+}
+
+func runGit(ctx context.Context, directory string, args ...string) error {
+	cmd := gitCommand(ctx, directory, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -80,8 +98,7 @@ func runGit(ctx context.Context, directory string, args ...string) error {
 }
 
 func gitOutput(ctx context.Context, directory string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = directory
+	cmd := gitCommand(ctx, directory, args...)
 	stdout, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError

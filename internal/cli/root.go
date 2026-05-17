@@ -1,10 +1,14 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/cafecito-games/godot-package-manager/internal/output"
 	"github.com/spf13/cobra"
@@ -63,13 +67,17 @@ func newRootCommand(opts *Options) *cobra.Command {
 // Execute runs the CLI with explicit streams and returns the mapped process exit
 // code. It is used by main and tests so error rendering stays consistent.
 func Execute(args []string, stdout, stderr io.Writer) output.ExitCode {
+	// Cancel in-flight git/HTTP work when the user interrupts the process.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	opts := &Options{}
 	cmd := newRootCommand(opts)
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
 	cmd.SetArgs(args)
 
-	if err := cmd.Execute(); err != nil {
+	if err := cmd.ExecuteContext(ctx); err != nil {
 		code := codeForError(err)
 		if opts.JSON {
 			encoder := json.NewEncoder(stdout)

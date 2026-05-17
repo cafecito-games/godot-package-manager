@@ -53,6 +53,11 @@ func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Mani
 	if err != nil {
 		return nil, err
 	}
+	for _, name := range names {
+		if _, ok := addonManifest.Addons[name]; !ok {
+			return nil, &output.ManifestError{Err: fmt.Errorf("unknown addon %q", name)}
+		}
+	}
 	targets := selectAddons(addonManifest, names)
 	var results []AddonResult
 	for _, spec := range targets {
@@ -74,15 +79,9 @@ func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Mani
 			return nil, err
 		}
 
-		if useLock {
-			entry := lock.Addons[spec.Name]
-			if entry.Checksum != "" && fetched.Checksum != "" && entry.Checksum != fetched.Checksum {
-				_ = os.RemoveAll(fetched.Dir)
-				return nil, &output.FetchError{Err: fmt.Errorf(
-					"addon %q: checksum mismatch (lock: %s, fetched: %s)",
-					spec.Name, entry.Checksum, fetched.Checksum,
-				)}
-			}
+		if err := verifyChecksum(spec, lock, fetched, useLock); err != nil {
+			_ = os.RemoveAll(fetched.Dir)
+			return nil, err
 		}
 
 		err = installer.Install(fetched, spec, r.AddonsDir)
@@ -105,10 +104,40 @@ func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Mani
 			InstallPath:     spec.InstallName(),
 		})
 	}
+	// On a full run, drop lock entries for addons no longer in the manifest so
+	// addons.lock does not accumulate stale pins.
+	if len(names) == 0 {
+		for name := range lock.Addons {
+			if _, ok := addonManifest.Addons[name]; !ok {
+				delete(lock.Addons, name)
+			}
+		}
+	}
 	if err := lock.Save(r.LockPath); err != nil {
 		return nil, err
 	}
 	return results, nil
+}
+
+// verifyChecksum checks a fetched archive against the manifest-declared
+// checksum (whenever one is set) and, when installing from an existing pin,
+// against the lockfile checksum. Git sources report no checksum and are
+// skipped.
+func verifyChecksum(spec manifest.AddonSpec, lock *manifest.Lockfile, fetched source.FetchResult, useLock bool) error {
+	if spec.Checksum != "" && fetched.Checksum != "" && spec.Checksum != fetched.Checksum {
+		return &output.FetchError{Err: fmt.Errorf(
+			"addon %q: checksum mismatch (manifest: %s, fetched: %s)",
+			spec.Name, spec.Checksum, fetched.Checksum)}
+	}
+	if useLock {
+		entry := lock.Addons[spec.Name]
+		if entry.Checksum != "" && fetched.Checksum != "" && entry.Checksum != fetched.Checksum {
+			return &output.FetchError{Err: fmt.Errorf(
+				"addon %q: checksum mismatch (lock: %s, fetched: %s)",
+				spec.Name, entry.Checksum, fetched.Checksum)}
+		}
+	}
+	return nil
 }
 
 // selectAddons returns the specs to operate on. An empty names slice selects

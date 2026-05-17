@@ -28,6 +28,12 @@ func newRemoveCommand(opts *Options) *cobra.Command {
 			if !ok {
 				return &UsageError{Err: fmt.Errorf("unknown addon %q", name)}
 			}
+			// Remove on-disk files first: if this fails, the addon is still
+			// fully declared in addons.toml/addons.lock, so the project stays
+			// internally consistent and the command can simply be retried.
+			if err := os.RemoveAll(filepath.Join(discovered.AddonsDir, spec.InstallName())); err != nil {
+				return &output.InstallError{Err: err}
+			}
 			delete(addonManifest.Addons, name)
 			if err := addonManifest.Save(discovered.ManifestPath); err != nil {
 				return err
@@ -41,9 +47,6 @@ func newRemoveCommand(opts *Options) *cobra.Command {
 				if err := lock.Save(discovered.LockPath); err != nil {
 					return err
 				}
-			}
-			if err := os.RemoveAll(filepath.Join(discovered.AddonsDir, spec.InstallName())); err != nil {
-				return &output.InstallError{Err: err}
 			}
 			if !opts.Quiet {
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "removed %s\n", name)

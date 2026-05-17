@@ -140,6 +140,69 @@ func TestInstallAddonsPersistsSuccessfulLockBeforeLaterFailure(t *testing.T) {
 	require.False(t, badLocked, "failed addon should not be added to the lockfile")
 }
 
+func TestInstallAddonsManifestChecksumMismatch(t *testing.T) {
+	projectRoot := t.TempDir()
+	m := &manifest.Manifest{Addons: map[string]manifest.AddonSpec{
+		"dlg": {Name: "dlg", Source: manifest.SourceArchive, URL: "u", Checksum: "expected-checksum"},
+	}}
+	r := &Runner{
+		AddonsDir: filepath.Join(projectRoot, "addons"),
+		LockPath:  filepath.Join(projectRoot, "addons.lock"),
+		FetcherFor: func(manifest.AddonSpec) (source.Fetcher, error) {
+			return fakeFetcher{version: "1.0", checksum: "actual-checksum"}, nil
+		},
+	}
+	_, err := r.InstallAddons(context.Background(), m, nil, ModeInstall)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "checksum mismatch")
+}
+
+func TestInstallAddonsRejectsUnknownName(t *testing.T) {
+	projectRoot := t.TempDir()
+	m := &manifest.Manifest{Addons: map[string]manifest.AddonSpec{
+		"dlg": {Name: "dlg", Source: manifest.SourceArchive, URL: "u"},
+	}}
+	r := &Runner{
+		AddonsDir: filepath.Join(projectRoot, "addons"),
+		LockPath:  filepath.Join(projectRoot, "addons.lock"),
+		FetcherFor: func(manifest.AddonSpec) (source.Fetcher, error) {
+			return fakeFetcher{version: "1.0"}, nil
+		},
+	}
+	_, err := r.InstallAddons(context.Background(), m, []string{"nonexistent"}, ModeInstall)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown addon")
+}
+
+func TestInstallAddonsPrunesStaleLockEntries(t *testing.T) {
+	projectRoot := t.TempDir()
+	lockPath := filepath.Join(projectRoot, "addons.lock")
+
+	stale := &manifest.Lockfile{Addons: map[string]manifest.LockEntry{
+		"removed": {ResolvedVersion: "9.9", SpecHash: "x"},
+	}}
+	require.NoError(t, stale.Save(lockPath))
+
+	m := &manifest.Manifest{Addons: map[string]manifest.AddonSpec{
+		"dlg": {Name: "dlg", Source: manifest.SourceArchive, URL: "u"},
+	}}
+	r := &Runner{
+		AddonsDir: filepath.Join(projectRoot, "addons"),
+		LockPath:  lockPath,
+		FetcherFor: func(manifest.AddonSpec) (source.Fetcher, error) {
+			return fakeFetcher{version: "1.0"}, nil
+		},
+	}
+	_, err := r.InstallAddons(context.Background(), m, nil, ModeInstall)
+	require.NoError(t, err)
+
+	lock, err := manifest.LoadLock(lockPath)
+	require.NoError(t, err)
+	_, stalePresent := lock.Addons["removed"]
+	require.False(t, stalePresent, "stale lock entry should be pruned on a full install")
+	require.Contains(t, lock.Addons, "dlg")
+}
+
 func TestInstallAddonsSelectsAllAddonsInNameOrder(t *testing.T) {
 	m := &manifest.Manifest{Addons: map[string]manifest.AddonSpec{
 		"zeta":  {Name: "zeta", Source: manifest.SourceArchive, URL: "u-z"},
