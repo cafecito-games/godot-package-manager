@@ -13,7 +13,7 @@ reproducible installs across machines and CI runs.
 ### Homebrew
 
 ```sh
-brew install cafecito-games/tap/gpm
+brew install --cask cafecito-games/tap/gpm
 ```
 
 ### From source
