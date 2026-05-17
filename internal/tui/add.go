@@ -3,7 +3,7 @@ package tui
 import (
 	"fmt"
 
-	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-package-manager/internal/manifest"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )

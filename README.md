@@ -1,8 +1,8 @@
-# gam — Godot Addon Manager
+# gpm — Godot Package Manager
 
-`gam` is a command-line addon manager for Godot projects. You check in an
+`gpm` is a command-line addon manager for Godot projects. You check in an
 `addons.toml` manifest that declares every addon your project depends on and
-where to obtain it. `gam` resolves and installs those addons into the project's
+where to obtain it. `gpm` resolves and installs those addons into the project's
 `addons/` directory. A committed `addons.lock` file pins exact versions for
 reproducible installs across machines and CI runs.
 
@@ -13,7 +13,7 @@ reproducible installs across machines and CI runs.
 ### Homebrew
 
 ```sh
-brew install cafecito-games/tap/gam
+brew install cafecito-games/tap/gpm
 ```
 
 ### From source
@@ -21,27 +21,27 @@ brew install cafecito-games/tap/gam
 Requires **Go 1.26.2 or newer** and `git` on your `PATH`.
 
 ```sh
-go install github.com/cafecito-games/godot-addon-manager/cmd/gam@latest
+go install github.com/cafecito-games/godot-package-manager/cmd/gpm@latest
 ```
 
 Or build locally:
 
 ```sh
-git clone https://github.com/cafecito-games/godot-addon-manager
-cd godot-addon-manager
-go build ./cmd/gam
+git clone https://github.com/cafecito-games/godot-package-manager
+cd godot-package-manager
+go build ./cmd/gpm
 ```
 
 ---
 
 ## Project layout
 
-`gam` discovers the Godot project root by walking up from the current directory
+`gpm` discovers the Godot project root by walking up from the current directory
 until it finds `project.godot`. `addons.toml` and `addons.lock` live alongside
 `project.godot`. Addons are installed under `<project-root>/addons/`.
 
-If no project root is found, `gam` fails with a clear error (the exception is
-`gam init`, which creates `addons.toml` in the current directory).
+If no project root is found, `gpm` fails with a clear error (the exception is
+`gpm init`, which creates `addons.toml` in the current directory).
 
 ---
 
@@ -94,51 +94,51 @@ url    = "https://example.com/thing-1.0.zip"  # zip or tarball
 
 ### `source_path` auto-detection
 
-When `source_path` is omitted, `gam` inspects the fetched tree:
+When `source_path` is omitted, `gpm` inspects the fetched tree:
 
 1. If a single `addons/<name>/` directory exists, that directory is used.
 2. Otherwise the root of the fetched tree is used.
 
-If the source has multiple directories under `addons/`, `gam` fails and
+If the source has multiple directories under `addons/`, `gpm` fails and
 instructs you to set `source_path` explicitly.
 
 ---
 
 ## Commands
 
-### `gam init`
+### `gpm init`
 
 Create a starter `addons.toml` in the current directory.
 
 ```sh
-gam init
+gpm init
 ```
 
-### `gam add`
+### `gpm add`
 
 Add an addon to `addons.toml` and install it immediately.
 
 **Interactive (TUI wizard):** run with no flags.
 
 ```sh
-gam add
+gpm add
 ```
 
 **Non-interactive:** pass all values as flags.
 
 ```sh
-gam add --name dialogue_manager \
+gpm add --name dialogue_manager \
         --source git \
         --url https://github.com/nathanhoad/godot_dialogue_manager.git \
         --version v2.1.0
 
-gam add --name some_plugin \
+gpm add --name some_plugin \
         --source github-release \
         --repo owner/some_plugin \
         --version 1.4.0 \
         --asset some_plugin.zip
 
-gam add --name raw_thing \
+gpm add --name raw_thing \
         --source archive \
         --url https://example.com/thing-1.0.zip
 ```
@@ -146,54 +146,54 @@ gam add --name raw_thing \
 Available flags: `--name`, `--source`, `--url`, `--repo`, `--version`,
 `--asset`, `--source-path`, `--install-as`, `--dir`.
 
-### `gam remove <name>`
+### `gpm remove <name>`
 
 Remove an addon from `addons.toml` and `addons.lock` and delete its installed
 directory under `addons/`.
 
 ```sh
-gam remove dialogue_manager
+gpm remove dialogue_manager
 ```
 
-### `gam install`
+### `gpm install`
 
 Install all addons declared in `addons.toml`, honoring `addons.lock` where
 entries are consistent with the manifest.
 
 ```sh
-gam install
+gpm install
 ```
 
 If an addon's manifest entry differs from its lock entry (or no lock entry
 exists), that addon is re-resolved and the lock is updated.
 
-### `gam update [name...]`
+### `gpm update [name...]`
 
 Re-resolve all addons (or only the named ones), install them, and rewrite
 `addons.lock`. Existing lock pins are ignored.
 
 ```sh
-gam update                  # update everything
-gam update dialogue_manager # update a single addon
+gpm update                  # update everything
+gpm update dialogue_manager # update a single addon
 ```
 
-### `gam list`
+### `gpm list`
 
 List all configured addons with their resolved/installed state.
 
 ```sh
-gam list
+gpm list
 ```
 
-### `gam completion`
+### `gpm completion`
 
 Generate shell completion scripts (provided by Cobra).
 
 ```sh
-gam completion bash   # add to ~/.bashrc
-gam completion zsh    # add to ~/.zshrc
-gam completion fish
-gam completion powershell
+gpm completion bash   # add to ~/.bashrc
+gpm completion zsh    # add to ~/.zshrc
+gpm completion fish
+gpm completion powershell
 ```
 
 ---
@@ -228,9 +228,9 @@ these commands emit a JSON object with an `error` field.
 
 ### Git sources
 
-`gam` shells out to the system `git` binary. Private repositories work
+`gpm` shells out to the system `git` binary. Private repositories work
 automatically via your existing SSH keys and credential helpers — no credentials
-are stored by `gam`.
+are stored by `gpm`.
 
 ### GitHub release sources
 
@@ -240,19 +240,19 @@ without a token.
 
 ```sh
 export GITHUB_TOKEN=ghp_...
-gam install
+gpm install
 ```
 
 ### Archive sources
 
 Archives are fetched over plain HTTPS. Embed credentials in the URL if the host
-requires authentication. `gam` does not manage a credential store.
+requires authentication. `gpm` does not manage a credential store.
 
 ---
 
 ## The lockfile
 
-`addons.lock` is generated by `gam` and should be committed to version control.
+`addons.lock` is generated by `gpm` and should be committed to version control.
 It pins:
 
 - The resolved commit SHA (git sources) or the SHA-256 of the downloaded asset
@@ -260,6 +260,6 @@ It pins:
 - The resolved `version` and `source_path` actually used.
 - A hash of the corresponding `addons.toml` entry, to detect manifest drift.
 
-`gam install` uses `addons.lock` when present. If an entry is consistent with
-the manifest the pinned version is installed without re-fetching. `gam update`
+`gpm install` uses `addons.lock` when present. If an entry is consistent with
+the manifest the pinned version is installed without re-fetching. `gpm update`
 always ignores existing pins, re-resolves, and rewrites the lockfile.

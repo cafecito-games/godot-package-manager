@@ -2,7 +2,7 @@ package cli
 
 import "github.com/spf13/cobra"
 
-// version is the build version of gam. It is "dev" for builds from source and
+// version is the build version of gpm. It is "dev" for builds from source and
 // is overridden at release time via -ldflags.
 var version = "dev"
 
@@ -19,12 +19,12 @@ type UsageError struct{ Err error }
 func (e *UsageError) Error() string { return e.Err.Error() }
 func (e *UsageError) Unwrap() error { return e.Err }
 
-// NewRootCommand builds the `gam` root command with global flags wired into a
+// NewRootCommand builds the `gpm` root command with global flags wired into a
 // shared Options value that subcommands read.
 func NewRootCommand() *cobra.Command {
 	opts := &Options{}
 	root := &cobra.Command{
-		Use:           "gam",
+		Use:           "gpm",
 		Short:         "Manage Godot project addons declared in addons.toml",
 		Version:       version,
 		SilenceUsage:  true,

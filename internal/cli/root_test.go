@@ -13,6 +13,7 @@ func TestRootHelpListsGlobalFlags(t *testing.T) {
 	cmd.SetOut(&out)
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
+	require.Contains(t, out.String(), "gpm")
 	require.Contains(t, out.String(), "--json")
 	require.Contains(t, out.String(), "--verbose")
 	require.Contains(t, out.String(), "--quiet")

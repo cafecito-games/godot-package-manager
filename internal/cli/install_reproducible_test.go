@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
+	"github.com/cafecito-games/godot-package-manager/internal/manifest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,9 +32,9 @@ func gitCommit(t *testing.T, repo, msg string) string {
 }
 
 // TestInstallReproducible verifies that:
-//  1. gam install records a resolved SHA in addons.lock.
-//  2. A second gam install after a new commit does NOT update the SHA (lock is honored).
-//  3. gam update after a new commit DOES update the SHA and installs the new file.
+//  1. gpm install records a resolved SHA in addons.lock.
+//  2. A second gpm install after a new commit does NOT update the SHA (lock is honored).
+//  3. gpm update after a new commit DOES update the SHA and installs the new file.
 func TestInstallReproducible(t *testing.T) {
 	// Create a git repo with an initial commit on branch "main".
 	repo := t.TempDir()
@@ -60,7 +60,7 @@ func TestInstallReproducible(t *testing.T) {
 
 	lockPath := filepath.Join(proj, "addons.lock")
 
-	runGAM := func(args ...string) {
+	runGPM := func(args ...string) {
 		t.Helper()
 		cmd := NewRootCommand()
 		cmd.SetOut(io.Discard)
@@ -70,7 +70,7 @@ func TestInstallReproducible(t *testing.T) {
 	}
 
 	// First install — resolves and pins firstSHA.
-	runGAM("install")
+	runGPM("install")
 
 	lock, err := manifest.LoadLock(lockPath)
 	require.NoError(t, err)
@@ -83,7 +83,7 @@ func TestInstallReproducible(t *testing.T) {
 	require.NotEqual(t, firstSHA, secondSHA)
 
 	// Second install — must honor the lock and stay on firstSHA.
-	runGAM("install")
+	runGPM("install")
 
 	lock, err = manifest.LoadLock(lockPath)
 	require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestInstallReproducible(t *testing.T) {
 	require.True(t, os.IsNotExist(err), "installed addon must not contain file from second commit")
 
 	// Update — must re-resolve to secondSHA.
-	runGAM("update")
+	runGPM("update")
 
 	lock, err = manifest.LoadLock(lockPath)
 	require.NoError(t, err)

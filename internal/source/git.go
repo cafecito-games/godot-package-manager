@@ -9,8 +9,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
-	"github.com/cafecito-games/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/manifest"
+	"github.com/cafecito-games/godot-package-manager/internal/output"
 )
 
 // GitFetcher clones a git ref using the system `git` binary, inheriting the
@@ -26,7 +26,7 @@ func (f *GitFetcher) Fetch(ctx context.Context, spec manifest.AddonSpec) (FetchR
 	if _, err := exec.LookPath("git"); err != nil {
 		return FetchResult{}, &output.FetchError{Err: fmt.Errorf("git binary not found on PATH")}
 	}
-	dir, err := os.MkdirTemp("", "gam-git-*")
+	dir, err := os.MkdirTemp("", "gpm-git-*")
 	if err != nil {
 		return FetchResult{}, &output.FetchError{Err: err}
 	}

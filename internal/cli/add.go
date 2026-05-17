@@ -4,10 +4,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
-	"github.com/cafecito-games/godot-addon-manager/internal/output"
-	"github.com/cafecito-games/godot-addon-manager/internal/source"
-	"github.com/cafecito-games/godot-addon-manager/internal/tui"
+	"github.com/cafecito-games/godot-package-manager/internal/manifest"
+	"github.com/cafecito-games/godot-package-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/source"
+	"github.com/cafecito-games/godot-package-manager/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -17,12 +17,12 @@ var testFetcherFor func(manifest.AddonSpec) (source.Fetcher, error)
 // runTUI launches the interactive add wizard.
 var runTUI = tui.RunAddWizard
 
-// addFlags collects the flag values for `gam add`.
+// addFlags collects the flag values for `gpm add`.
 type addFlags struct {
 	name, source, url, repo, version, asset, sourcePath, installAs, dir string
 }
 
-// newAddCommand builds `gam add`.
+// newAddCommand builds `gpm add`.
 func newAddCommand(opts *Options) *cobra.Command {
 	flagValues := &addFlags{}
 	cmd := &cobra.Command{

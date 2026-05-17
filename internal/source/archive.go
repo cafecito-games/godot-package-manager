@@ -16,8 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
-	"github.com/cafecito-games/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/manifest"
+	"github.com/cafecito-games/godot-package-manager/internal/output"
 )
 
 // ArchiveFetcher downloads and extracts a plain zip or tarball URL.
@@ -30,7 +30,7 @@ func (f *ArchiveFetcher) Fetch(ctx context.Context, spec manifest.AddonSpec) (Fe
 	if err != nil {
 		return FetchResult{}, err
 	}
-	dir, err := os.MkdirTemp("", "gam-archive-*")
+	dir, err := os.MkdirTemp("", "gpm-archive-*")
 	if err != nil {
 		return FetchResult{}, &output.FetchError{Err: err}
 	}

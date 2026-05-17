@@ -5,12 +5,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/cafecito-games/godot-addon-manager/internal/manifest"
-	"github.com/cafecito-games/godot-addon-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/manifest"
+	"github.com/cafecito-games/godot-package-manager/internal/output"
 	"github.com/spf13/cobra"
 )
 
-// newRemoveCommand builds `gam remove <addon>`.
+// newRemoveCommand builds `gpm remove <addon>`.
 func newRemoveCommand(opts *Options) *cobra.Command {
 	var dir string
 	cmd := &cobra.Command{
