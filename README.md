@@ -258,6 +258,19 @@ export GITHUB_TOKEN=ghp_...
 gpm install
 ```
 
+If you use the [GitHub CLI](https://cli.github.com/), you can reuse its
+credentials directly:
+
+```sh
+export GITHUB_TOKEN=$(gh auth token)
+gpm install
+```
+
+> **Note:** GitHub returns `HTTP 404` (not `403`) for private repositories that
+> a request cannot see. If `gpm install` fails with a 404 for a release you know
+> exists, the most likely cause is a missing or insufficiently scoped token —
+> the token needs `repo` (classic) or `Contents: read` (fine-grained) access.
+
 ### Archive sources
 
 Archives are fetched over plain HTTPS. Embed credentials in the URL if the host

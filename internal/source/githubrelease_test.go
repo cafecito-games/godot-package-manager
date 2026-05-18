@@ -165,6 +165,44 @@ func TestGitHubReleaseSendsToken(t *testing.T) {
 	require.Equal(t, "Bearer secret123", receivedAuthHeader)
 }
 
+func TestGitHubReleaseHintsAtTokenOn404(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	f := &GitHubReleaseFetcher{APIBase: srv.URL}
+	_, err := f.Fetch(context.Background(), manifest.AddonSpec{
+		Source: manifest.SourceGitHubRelease, Repo: "owner/repo", Version: "1.0",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "private repository")
+	require.Contains(t, err.Error(), "GITHUB_TOKEN")
+}
+
+func TestGitHubReleaseNoTokenHintWhenTokenSet(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "secret123")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	f := &GitHubReleaseFetcher{APIBase: srv.URL}
+	_, err := f.Fetch(context.Background(), manifest.AddonSpec{
+		Source: manifest.SourceGitHubRelease, Repo: "owner/repo", Version: "1.0",
+	})
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "private repository")
+}
+
 func TestGitHubReleaseEscapesTagPathComponent(t *testing.T) {
 	payload := zipBytes(t, map[string]string{"plugin.cfg": "[plugin]"})
 	var gotReleasePath string
