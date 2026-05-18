@@ -56,7 +56,7 @@ func (f *GitHubReleaseFetcher) Fetch(ctx context.Context, spec manifest.AddonSpe
 		url.PathEscape(spec.Version))
 	body, err := download(ctx, f.client, apiURL, githubHeader("application/vnd.github+json"), 0)
 	if err != nil {
-		return FetchResult{}, err
+		return FetchResult{}, annotateGitHubError(err)
 	}
 	var release ghRelease
 	if err := json.Unmarshal(body, &release); err != nil {
@@ -116,17 +116,40 @@ func selectAsset(assets []ghAsset, pattern string) (ghAsset, error) {
 	}
 }
 
+// githubToken returns the GitHub API token from the environment, preferring
+// GITHUB_TOKEN and falling back to GH_TOKEN. The result is empty when neither
+// is set.
+func githubToken() string {
+	token := os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		token = os.Getenv("GH_TOKEN")
+	}
+	return strings.TrimSpace(token)
+}
+
 // githubHeader returns request headers with the given Accept value, including
 // auth when a token is present in the environment.
 func githubHeader(accept string) http.Header {
 	header := http.Header{}
 	header.Set("Accept", accept)
-	token := os.Getenv("GITHUB_TOKEN")
-	if token == "" {
-		token = os.Getenv("GH_TOKEN")
-	}
-	if token != "" {
-		header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	if token := githubToken(); token != "" {
+		header.Set("Authorization", "Bearer "+token)
 	}
 	return header
+}
+
+// annotateGitHubError adds a hint about authentication when a request fails
+// with HTTP 404 and no token is configured. GitHub returns 404 (not 403) for
+// private repositories that the request cannot see, so an unauthenticated 404
+// is most often a missing token rather than a genuinely absent release.
+func annotateGitHubError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if githubToken() == "" && strings.Contains(err.Error(), "HTTP 404") {
+		return &output.FetchError{Err: fmt.Errorf(
+			"%w\nif this is a private repository, set GITHUB_TOKEN to authenticate "+
+				"(e.g. export GITHUB_TOKEN=$(gh auth token))", err)}
+	}
+	return err
 }
