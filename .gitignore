@@ -1,2 +1,7 @@
 # GoReleaser build output
 /dist/
+
+# Docusaurus
+website/.docusaurus/
+website/build/
+website/node_modules/
