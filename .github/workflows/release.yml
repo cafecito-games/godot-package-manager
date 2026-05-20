@@ -27,7 +27,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Compute and push release tag
+      - name: Ensure manual releases run from main
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_NAME}" != "main" ]; then
+            echo "::error::Manual releases must be run from main, not ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+
+      - name: Compute release version
+        id: release-version
         if: github.event_name == 'workflow_dispatch'
         run: |
           set -euo pipefail
@@ -61,10 +71,47 @@ jobs:
             exit 1
           fi
 
+          echo "tag=$new_tag" >> "$GITHUB_OUTPUT"
+          echo "version=${new_tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install docs dependencies
+        if: github.event_name == 'workflow_dispatch'
+        run: npm ci
+        working-directory: website
+
+      - name: Snapshot docs version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ steps.release-version.outputs.version }}
+        run: npm run docusaurus -- docs:version "$VERSION"
+        working-directory: website
+
+      - name: Commit docs snapshot and tag release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          NEW_TAG: ${{ steps.release-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "$new_tag" -m "Release $new_tag"
-          git push origin "$new_tag"
+          git add website/versioned_docs website/versioned_sidebars website/versions.json
+          if git diff --cached --quiet; then
+            echo "::error::Docs version snapshot did not create any changes"
+            exit 1
+          fi
+          git commit -m "docs: snapshot $NEW_TAG"
+          git tag -a "$NEW_TAG" -m "Release $NEW_TAG"
+          git push origin HEAD:main "$NEW_TAG"
+          git checkout "$NEW_TAG"
 
       - name: Set up Go
         uses: actions/setup-go@v5
