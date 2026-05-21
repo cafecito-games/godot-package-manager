@@ -5,10 +5,24 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func gitTestEnv() []string {
+	env := make([]string, 0, len(os.Environ())+4)
+	for _, value := range os.Environ() {
+		if strings.HasPrefix(value, "GIT_") {
+			continue
+		}
+		env = append(env, value)
+	}
+	return append(env,
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+}
 
 func gitInitRepo(t *testing.T) string {
 	t.Helper()
@@ -16,9 +30,7 @@ func gitInitRepo(t *testing.T) string {
 	run := func(args ...string) {
 		c := exec.Command("git", args...)
 		c.Dir = repo
-		c.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
-			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		c.Env = gitTestEnv()
 		out, err := c.CombinedOutput()
 		require.NoError(t, err, string(out))
 	}

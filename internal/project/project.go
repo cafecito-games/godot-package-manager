@@ -6,6 +6,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/cafecito-games/godot-package-manager/internal/output"
 )
@@ -17,6 +19,10 @@ type Project struct {
 	LockPath     string // <Root>/addons.lock
 	AddonsDir    string // <Root>/addons
 }
+
+// ErrProjectNotFound marks discovery failure when no project.godot exists in
+// the start directory or any parent directory.
+var ErrProjectNotFound = errors.New("no project.godot found")
 
 // Discover walks up from startDir until it finds a directory containing
 // project.godot. It returns an *output.ManifestError if none is found.
@@ -42,7 +48,7 @@ func Discover(startDir string) (*Project, error) {
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			return nil, &output.ManifestError{
-				Err: fmt.Errorf("no project.godot found in %s or any parent directory", startDir),
+				Err: fmt.Errorf("%w in %s or any parent directory", ErrProjectNotFound, startDir),
 			}
 		}
 		dir = parent
@@ -57,4 +63,31 @@ func forRoot(root string) *Project {
 		LockPath:     filepath.Join(root, "addons.lock"),
 		AddonsDir:    filepath.Join(root, "addons"),
 	}
+}
+
+var godotFeatureVersionPattern = regexp.MustCompile(`"([0-9]+\.[0-9]+(?:\.[0-9]+)?)"`)
+
+// DetectGodotVersion reads project.godot and returns a best-effort major.minor
+// version from config/features. It returns an empty string when no version-like
+// feature is present or the project file cannot be read.
+func DetectGodotVersion(root string) string {
+	data, err := os.ReadFile(filepath.Join(root, "project.godot"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "config/features=") {
+			continue
+		}
+		for _, match := range godotFeatureVersionPattern.FindAllStringSubmatch(line, -1) {
+			if len(match) != 2 {
+				continue
+			}
+			parts := strings.Split(match[1], ".")
+			if len(parts) >= 2 {
+				return parts[0] + "." + parts[1]
+			}
+		}
+	}
+	return ""
 }

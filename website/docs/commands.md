@@ -71,6 +71,66 @@ Available flags:
 `gpm add` saves the manifest before installing. If installation fails, it rolls
 back the manifest entry.
 
+## gpm assetlib
+
+Search Godot AssetLib, add selected addons to `addons.toml`, and install them.
+
+Interactive search:
+
+```bash
+gpm assetlib
+```
+
+If no `project.godot` is found, the interactive browser uses the latest stable
+Godot version for search filtering. Adding and installing still requires running
+inside a Godot project with `addons.toml`; without one, asset detail opens in
+browse-only mode.
+
+In the interactive browser, press `f` to open the category filter drawer.
+Selecting a category browses that category; typed search text searches within
+the selected category. Interactive searches fetch up to 20 results at a time;
+refine the query or category when you need a narrower set.
+
+Non-interactive search:
+
+```bash
+gpm assetlib search dialogue --godot-version 4.2
+```
+
+`gpm assetlib search` can run outside a Godot project and does not require
+`addons.toml`. If no project is found and `--godot-version` is omitted, it uses
+the latest stable Godot version for filtering.
+
+Add by AssetLib ID:
+
+```bash
+gpm assetlib add 2598
+```
+
+`gpm assetlib add` fetches AssetLib detail for the ID, stores the selected addon
+as an `archive` entry in `addons.toml`, and installs it immediately. If
+installation fails, the manifest entry is rolled back.
+
+Search flags:
+
+| Flag | Notes |
+| --- | --- |
+| `--godot-version` | Godot version filter, such as `4.2`. If omitted, `gpm` tries `project.godot` `config/features`; outside a project it uses the latest stable Godot version. |
+| `--category` | AssetLib category ID or name. |
+| `--support` | `official`, `featured`, `community`, or `testing`. |
+| `--sort` | `rating`, `cost`, `name`, or `updated`. |
+| `--max-results` | Result count, from 1 to 500. |
+| `--dir` | Start directory for project discovery. |
+
+Add flags:
+
+| Flag | Notes |
+| --- | --- |
+| `--name` | Override the manifest key derived from the AssetLib title. |
+| `--source-path` | Subdirectory inside the downloaded asset to install. |
+| `--install-as` | Directory name under `addons/`. |
+| `--dir` | Start directory for project discovery. |
+
 ## gpm install
 
 Install every addon declared in `addons.toml`:
@@ -134,4 +194,5 @@ gpm completion powershell
 | `--verbose` | `-v` | Print project, manifest, and lockfile paths. |
 | `--quiet` | `-q` | Suppress non-error output. |
 
-`--json` is supported by `add`, `install`, `update`, and `list`.
+`--json` is supported by `add`, `assetlib search`, `assetlib add`, `install`,
+`update`, and `list`.

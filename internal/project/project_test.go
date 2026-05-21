@@ -1,6 +1,7 @@
 package project
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -26,6 +27,7 @@ func TestDiscoverWalksUp(t *testing.T) {
 func TestDiscoverNotFound(t *testing.T) {
 	_, err := Discover(t.TempDir())
 	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrProjectNotFound))
 	var manifestErr *output.ManifestError
 	require.ErrorAs(t, err, &manifestErr)
 }
@@ -39,4 +41,24 @@ func TestDiscoverRejectsDirectoryNamedProjectGodot(t *testing.T) {
 	var manifestErr *output.ManifestError
 	require.ErrorAs(t, err, &manifestErr)
 	require.Contains(t, err.Error(), "not a regular file")
+}
+
+func TestDetectGodotVersionFromFeatures(t *testing.T) {
+	root := t.TempDir()
+	body := `config/features=PackedStringArray("4.3", "Forward Plus")`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "project.godot"), []byte(body), 0o644))
+
+	require.Equal(t, "4.3", DetectGodotVersion(root))
+}
+
+func TestDetectGodotVersionTrimsPatchVersion(t *testing.T) {
+	root := t.TempDir()
+	body := `config/features=PackedStringArray("4.2.2", "Mobile")`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "project.godot"), []byte(body), 0o644))
+
+	require.Equal(t, "4.2", DetectGodotVersion(root))
+}
+
+func TestDetectGodotVersionReturnsEmptyWhenMissing(t *testing.T) {
+	require.Equal(t, "", DetectGodotVersion(t.TempDir()))
 }

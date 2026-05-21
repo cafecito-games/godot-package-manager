@@ -31,10 +31,24 @@ Create a manifest next to `project.godot`:
 gpm init
 ```
 
-Add an addon interactively:
+Search Godot AssetLib and add an addon interactively:
 
 ```bash
-gpm add
+gpm assetlib
+```
+
+Press `f` in the AssetLib browser to open the category filter drawer. Selecting
+a category browses that category, and any typed search text is used within the
+selected category. Interactive searches fetch up to 20 results at a time.
+
+Outside a Godot project, AssetLib browsing and search use the latest stable
+Godot version; installing is enabled only inside a project with `addons.toml`.
+
+Or search and add by AssetLib ID:
+
+```bash
+gpm assetlib search dialogue --godot-version 4.2
+gpm assetlib add 2598
 ```
 
 Or add one non-interactively:
@@ -75,6 +89,9 @@ Commit `addons.toml` and `addons.lock` so installs stay reproducible.
 - `git`: clone a Git repository at a tag, branch, or commit SHA.
 - `github-release`: download one asset from a GitHub release.
 - `archive`: download a direct HTTP(S) zip or tar archive.
+
+`gpm assetlib add` resolves Godot AssetLib assets to archive URLs and stores
+them as `archive` entries in `addons.toml`.
 
 Use `source_path` when the addon lives inside a subdirectory of the fetched
 source, and `install_as` when the installed directory name should differ from

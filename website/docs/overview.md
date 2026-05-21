@@ -38,7 +38,7 @@ Each source can install either the fetched root or a subdirectory selected with
 For most projects:
 
 1. Run `gpm init` next to `project.godot`.
-2. Add dependencies with `gpm add` or by editing `addons.toml`.
+2. Add dependencies with `gpm assetlib`, `gpm add`, or by editing `addons.toml`.
 3. Run `gpm install` to populate `addons/` and write `addons.lock`.
 4. Commit `addons.toml` and `addons.lock`.
 5. Run `gpm update` when you intentionally want new pins.

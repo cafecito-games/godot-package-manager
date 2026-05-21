@@ -53,11 +53,7 @@ func newAddCommand(opts *Options) *cobra.Command {
 			}
 			single := &manifest.Manifest{Addons: map[string]manifest.AddonSpec{spec.Name: spec}}
 			if err := single.Validate(); err != nil {
-				var manifestErr *output.ManifestError
-				if errors.As(err, &manifestErr) {
-					return &UsageError{Err: manifestErr.Err}
-				}
-				return &UsageError{Err: err}
+				return err
 			}
 			addonManifest.Addons[spec.Name] = spec
 			// Persist the manifest before installing so the success path has no

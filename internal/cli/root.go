@@ -61,6 +61,7 @@ func newRootCommand(opts *Options) *cobra.Command {
 	root.AddCommand(newUpdateCommand(opts))
 	root.AddCommand(newRemoveCommand(opts))
 	root.AddCommand(newAddCommand(opts))
+	root.AddCommand(newAssetLibCommand(opts))
 	return root
 }
 

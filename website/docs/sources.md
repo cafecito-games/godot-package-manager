@@ -62,3 +62,25 @@ locked installs.
 
 If the archive host requires credentials, include them in the URL format the
 host supports. `gpm` does not manage an archive credential store.
+
+## Godot AssetLib
+
+`gpm assetlib add` searches or fetches an asset from Godot AssetLib, resolves
+the asset to its generated download URL, and stores it as an `archive` source in
+`addons.toml`:
+
+```toml
+[addons.dialogue_engine]
+source = "archive"
+url = "https://example.com/dialogue-engine/archive/main.zip"
+version = "1.6.0"
+checksum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+```
+
+There is no separate `source = "assetlib"` manifest type. Once the AssetLib
+entry is resolved, installs use the same archive download, extraction, checksum,
+and lockfile behavior as any other archive source.
+
+The `version` field records the AssetLib version label as advisory metadata.
+When AssetLib provides a SHA-256 `download_hash`, `gpm assetlib add` records it
+as `checksum`; that checksum is what verifies the fetched archive.

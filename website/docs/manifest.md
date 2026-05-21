@@ -48,6 +48,21 @@ checksum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 Archives may be zip or tar formats supported by `gpm`. Archive downloads are
 capped at 512 MiB.
 
+## AssetLib-Added Entries
+
+`gpm assetlib add` does not create a new manifest source type. It resolves the
+AssetLib asset's `download_url` and writes a normal archive entry:
+
+```toml
+[addons.dialogue_engine]
+source = "archive"
+url = "https://example.com/dialogue-engine/archive/main.zip"
+version = "1.6.0"
+```
+
+Use `source_path` or `install_as` with `gpm assetlib add` when the downloaded
+archive layout needs the same disambiguation as any other archive source.
+
 ## Field Reference
 
 | Field | Applies to | Required | Notes |
