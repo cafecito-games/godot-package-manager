@@ -11,11 +11,14 @@ Use `--json` when another tool needs structured output:
 gpm --json list
 gpm --json install
 gpm --json update dialogue_manager
+gpm --json assetlib search dialogue --godot-version 4.2
 ```
 
 `--json` is supported by:
 
 - `add`
+- `assetlib search`
+- `assetlib add`
 - `install`
 - `update`
 - `list`
@@ -48,6 +51,34 @@ Successful install operations emit one result per installed addon:
   }
 ]
 ```
+
+## AssetLib Search
+
+`gpm --json assetlib search <query>` emits AssetLib result objects:
+
+```json
+[
+  {
+    "asset_id": "2598",
+    "title": "Dialogue Engine",
+    "author": "Rubonnek",
+    "author_id": "2467",
+    "category": "Tools",
+    "category_id": "5",
+    "godot_version": "4.2",
+    "rating": "0",
+    "cost": "MIT",
+    "support_level": "community",
+    "icon_url": "https://example.com/icon.png",
+    "version": "12",
+    "version_string": "1.6.0",
+    "modify_date": "2026-02-27 22:05:18"
+  }
+]
+```
+
+`gpm --json assetlib add <asset-id>` emits the same add/install result payload
+as `gpm --json add`.
 
 ## Errors
 

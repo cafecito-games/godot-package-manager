@@ -19,9 +19,7 @@ func gitCommit(t *testing.T, repo, msg string) string {
 	run := func(args ...string) string {
 		c := exec.Command("git", args...)
 		c.Dir = repo
-		c.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
-			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		c.Env = gitTestEnv()
 		out, err := c.CombinedOutput()
 		require.NoError(t, err, string(out))
 		return strings.TrimSpace(string(out))
@@ -41,9 +39,7 @@ func TestInstallReproducible(t *testing.T) {
 	runInRepo := func(args ...string) string {
 		c := exec.Command("git", args...)
 		c.Dir = repo
-		c.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
-			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		c.Env = gitTestEnv()
 		out, err := c.CombinedOutput()
 		require.NoError(t, err, string(out))
 		return strings.TrimSpace(string(out))

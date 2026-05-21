@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/cafecito-games/godot-package-manager/internal/manifest"
+	"github.com/cafecito-games/godot-package-manager/internal/output"
 	"github.com/cafecito-games/godot-package-manager/internal/source"
 	"github.com/stretchr/testify/require"
 )
@@ -73,8 +74,8 @@ func TestAddRejectsBadSourceCombo(t *testing.T) {
 	cmd.SetArgs([]string{"--name", "x", "--source", "git", "--dir", dir})
 	err := cmd.Execute()
 	require.Error(t, err)
-	var usageErr *UsageError
-	require.ErrorAs(t, err, &usageErr)
+	var manifestErr *output.ManifestError
+	require.ErrorAs(t, err, &manifestErr)
 }
 
 func TestAddFetchFailureDoesNotPersistManifestEntry(t *testing.T) {

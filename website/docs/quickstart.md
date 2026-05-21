@@ -40,13 +40,27 @@ This creates `addons.toml` next to `project.godot`.
 
 ## 3. Add an addon
 
-Run the interactive wizard:
+Search AssetLib interactively:
 
 ```bash
-gpm add
+gpm assetlib
 ```
 
-Or add a Git-backed addon non-interactively:
+Press `f` in the interactive browser to browse AssetLib categories or search
+within the selected category. Interactive searches fetch up to 20 results at a
+time.
+
+When browsing outside a Godot project, `gpm` uses the latest stable Godot
+version and disables install confirmation until you run it inside a project with
+`addons.toml`.
+
+Or add a known AssetLib asset ID:
+
+```bash
+gpm assetlib add 2598
+```
+
+Or add a Git-backed addon directly:
 
 ```bash
 gpm add --name dialogue_manager \
@@ -56,8 +70,9 @@ gpm add --name dialogue_manager \
   --source-path addons/dialogue_manager
 ```
 
-`gpm add` writes the manifest entry and installs the addon immediately. If the
-install fails, the new manifest entry is rolled back.
+`gpm assetlib add` resolves the selected AssetLib entry to an archive URL,
+writes the manifest entry, and installs the addon immediately. If the install
+fails, the new manifest entry is rolled back.
 
 ## 4. Reproduce installs
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cafecito-games/godot-package-manager/internal/manifest"
@@ -12,15 +13,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func gitTestEnv() []string {
+	env := make([]string, 0, len(os.Environ())+4)
+	for _, value := range os.Environ() {
+		if strings.HasPrefix(value, "GIT_") {
+			continue
+		}
+		env = append(env, value)
+	}
+	return append(env,
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+}
+
 func makeLocalRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	run := func(args ...string) {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
-			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		cmd.Env = gitTestEnv()
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, string(out))
 	}
