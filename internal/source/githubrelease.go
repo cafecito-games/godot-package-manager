@@ -24,6 +24,10 @@ type GitHubReleaseFetcher struct {
 	client *http.Client
 	// assetURLRewrite, if set, rewrites an asset download URL (used in tests).
 	assetURLRewrite func(string) string
+	// maxBytes overrides the download size cap; 0 uses defaultMaxDownloadBytes.
+	maxBytes int64
+	// maxExtracted overrides the extracted size cap; 0 uses maxExtractedBytes.
+	maxExtracted int64
 }
 
 type ghAsset struct {
@@ -54,7 +58,7 @@ func (f *GitHubReleaseFetcher) Fetch(ctx context.Context, spec manifest.AddonSpe
 		url.PathEscape(repoParts[0]),
 		url.PathEscape(repoParts[1]),
 		url.PathEscape(spec.Version))
-	body, err := download(ctx, f.client, apiURL, githubHeader("application/vnd.github+json"), 0)
+	body, err := download(ctx, f.client, apiURL, githubHeader("application/vnd.github+json"), f.maxBytes)
 	if err != nil {
 		return FetchResult{}, annotateGitHubError(err)
 	}
@@ -72,7 +76,7 @@ func (f *GitHubReleaseFetcher) Fetch(ctx context.Context, spec manifest.AddonSpe
 	}
 	// Asset bytes are served from the asset's API URL; the octet-stream Accept
 	// header tells GitHub to return the binary rather than the asset's JSON.
-	archivePath, checksum, err := downloadToFile(ctx, f.client, downloadURL, githubHeader("application/octet-stream"), 0)
+	archivePath, checksum, err := downloadToFile(ctx, f.client, downloadURL, githubHeader("application/octet-stream"), f.maxBytes)
 	if err != nil {
 		return FetchResult{}, err
 	}
@@ -82,7 +86,7 @@ func (f *GitHubReleaseFetcher) Fetch(ctx context.Context, spec manifest.AddonSpe
 	if err != nil {
 		return FetchResult{}, &output.FetchError{Err: err}
 	}
-	if err := extractArchive(asset.Name, archivePath, dir); err != nil {
+	if err := extractArchive(asset.Name, archivePath, dir, f.maxExtracted); err != nil {
 		_ = os.RemoveAll(dir)
 		return FetchResult{}, err
 	}

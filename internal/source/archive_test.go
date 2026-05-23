@@ -174,6 +174,35 @@ func TestArchiveFetchRejectsDecompressionBomb(t *testing.T) {
 	require.Contains(t, err.Error(), "maximum extracted size")
 }
 
+func TestArchiveFetchHonorsPerFetcherMaxBytes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(bytes.Repeat([]byte("x"), 1024))
+	}))
+	defer srv.Close()
+
+	f := &ArchiveFetcher{maxBytes: 16}
+	_, err := f.Fetch(context.Background(), manifest.AddonSpec{
+		Source: manifest.SourceArchive, URL: srv.URL + "/big.zip",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "exceeds maximum download size")
+}
+
+func TestArchiveFetchHonorsPerFetcherMaxExtracted(t *testing.T) {
+	payload := zipBytes(t, map[string]string{"big.bin": string(bytes.Repeat([]byte("a"), 2048))})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(payload)
+	}))
+	defer srv.Close()
+
+	f := &ArchiveFetcher{maxExtracted: 128}
+	_, err := f.Fetch(context.Background(), manifest.AddonSpec{
+		Source: manifest.SourceArchive, URL: srv.URL + "/big.zip",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "maximum extracted size")
+}
+
 func TestArchiveExtractRejectsSymlinkEntry(t *testing.T) {
 	var buf bytes.Buffer
 	gzipWriter := gzip.NewWriter(&buf)

@@ -33,3 +33,32 @@ func TestFetcherForUnknownType(t *testing.T) {
 	var fetchError *output.FetchError
 	require.ErrorAs(t, err, &fetchError)
 }
+
+func TestFetcherForWithLimitsPropagatesToArchive(t *testing.T) {
+	limits := Limits{MaxDownloadBytes: 7, MaxExtractedBytes: 11}
+	fetcher, err := FetcherForWithLimits(limits)(manifest.AddonSpec{Source: manifest.SourceArchive})
+	require.NoError(t, err)
+	archive, ok := fetcher.(*ArchiveFetcher)
+	require.True(t, ok)
+	require.Equal(t, int64(7), archive.maxBytes)
+	require.Equal(t, int64(11), archive.maxExtracted)
+}
+
+func TestFetcherForWithLimitsPropagatesToGitHubRelease(t *testing.T) {
+	limits := Limits{MaxDownloadBytes: 13, MaxExtractedBytes: 17}
+	fetcher, err := FetcherForWithLimits(limits)(manifest.AddonSpec{Source: manifest.SourceGitHubRelease})
+	require.NoError(t, err)
+	ghRelease, ok := fetcher.(*GitHubReleaseFetcher)
+	require.True(t, ok)
+	require.Equal(t, int64(13), ghRelease.maxBytes)
+	require.Equal(t, int64(17), ghRelease.maxExtracted)
+}
+
+func TestFetcherForWithZeroLimitsLeavesDefaults(t *testing.T) {
+	fetcher, err := FetcherForWithLimits(Limits{})(manifest.AddonSpec{Source: manifest.SourceArchive})
+	require.NoError(t, err)
+	archive, ok := fetcher.(*ArchiveFetcher)
+	require.True(t, ok)
+	require.Zero(t, archive.maxBytes)
+	require.Zero(t, archive.maxExtracted)
+}

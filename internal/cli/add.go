@@ -61,7 +61,7 @@ func newAddCommand(opts *Options) *cobra.Command {
 			if err := addonManifest.Save(discovered.ManifestPath); err != nil {
 				return err
 			}
-			runner := NewRunner(discovered.AddonsDir, discovered.LockPath)
+			runner := NewRunner(discovered.AddonsDir, discovered.LockPath, limitsFor(opts))
 			if testFetcherFor != nil {
 				runner.FetcherFor = testFetcherFor
 			}

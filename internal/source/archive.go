@@ -47,6 +47,8 @@ type ArchiveFetcher struct {
 	client *http.Client
 	// maxBytes overrides the download size cap; 0 uses defaultMaxDownloadBytes.
 	maxBytes int64
+	// maxExtracted overrides the extracted size cap; 0 uses maxExtractedBytes.
+	maxExtracted int64
 }
 
 // Fetch downloads spec.URL, extracts it into a new temp directory, and reports
@@ -62,7 +64,7 @@ func (f *ArchiveFetcher) Fetch(ctx context.Context, spec manifest.AddonSpec) (Fe
 	if err != nil {
 		return FetchResult{}, &output.FetchError{Err: err}
 	}
-	if err := extractArchive(spec.URL, archivePath, dir); err != nil {
+	if err := extractArchive(spec.URL, archivePath, dir, f.maxExtracted); err != nil {
 		_ = os.RemoveAll(dir)
 		return FetchResult{}, err
 	}
@@ -161,14 +163,15 @@ func downloadToFile(ctx context.Context, client *http.Client, rawURL string, hea
 }
 
 // extractArchive extracts the archive at archivePath into dir, choosing zip vs
-// tar.gz based on nameHint's file extension.
-func extractArchive(nameHint, archivePath, dir string) error {
+// tar.gz based on nameHint's file extension. maxExtracted <= 0 uses the
+// package default cap.
+func extractArchive(nameHint, archivePath, dir string, maxExtracted int64) error {
 	archiveName := archiveNameForDetection(nameHint)
 	switch {
 	case strings.HasSuffix(archiveName, ".zip"):
-		return extractZip(archivePath, dir)
+		return extractZip(archivePath, dir, maxExtracted)
 	case strings.HasSuffix(archiveName, ".tar.gz"), strings.HasSuffix(archiveName, ".tgz"):
-		return extractTarGz(archivePath, dir)
+		return extractTarGz(archivePath, dir, maxExtracted)
 	default:
 		return &output.FetchError{Err: fmt.Errorf("unsupported archive type: %s", nameHint)}
 	}
@@ -184,8 +187,16 @@ func archiveNameForDetection(nameHint string) string {
 // extractGuard enforces per-archive limits on entry count and total
 // uncompressed size.
 type extractGuard struct {
-	files int
-	bytes int64
+	files    int
+	bytes    int64
+	maxBytes int64
+}
+
+func newExtractGuard(maxBytes int64) *extractGuard {
+	if maxBytes <= 0 {
+		maxBytes = maxExtractedBytes
+	}
+	return &extractGuard{maxBytes: maxBytes}
 }
 
 func (g *extractGuard) addFile() error {
@@ -199,21 +210,21 @@ func (g *extractGuard) addFile() error {
 
 func (g *extractGuard) addBytes(n int64) error {
 	g.bytes += n
-	if g.bytes > maxExtractedBytes {
+	if g.bytes > g.maxBytes {
 		return &output.InstallError{Err: fmt.Errorf(
-			"archive expands beyond the maximum extracted size of %d bytes", maxExtractedBytes)}
+			"archive expands beyond the maximum extracted size of %d bytes", g.maxBytes)}
 	}
 	return nil
 }
 
-func extractZip(archivePath, dir string) error {
+func extractZip(archivePath, dir string, maxExtracted int64) error {
 	reader, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return &output.InstallError{Err: err}
 	}
 	defer func() { _ = reader.Close() }()
 
-	guard := &extractGuard{}
+	guard := newExtractGuard(maxExtracted)
 	for _, zipFile := range reader.File {
 		dest, err := safeJoin(dir, zipFile.Name)
 		if err != nil {
@@ -248,7 +259,7 @@ func extractZip(archivePath, dir string) error {
 	return nil
 }
 
-func extractTarGz(archivePath, dir string) error {
+func extractTarGz(archivePath, dir string, maxExtracted int64) error {
 	file, err := os.Open(archivePath)
 	if err != nil {
 		return &output.InstallError{Err: err}
@@ -260,7 +271,7 @@ func extractTarGz(archivePath, dir string) error {
 	}
 	defer func() { _ = gzipReader.Close() }()
 
-	guard := &extractGuard{}
+	guard := newExtractGuard(maxExtracted)
 	tarReader := tar.NewReader(gzipReader)
 	for {
 		header, err := tarReader.Next()
@@ -307,14 +318,14 @@ func safeJoin(base, name string) (string, error) {
 }
 
 // writeFile writes reader into dest, enforcing the guard's total-size cap so a
-// single entry cannot expand the archive past maxExtractedBytes.
+// single entry cannot expand the archive past the guard's maximum.
 func writeFile(dest string, reader io.Reader, mode os.FileMode, guard *extractGuard) error {
 	out, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode|0o200)
 	if err != nil {
 		return &output.InstallError{Err: err}
 	}
 	defer func() { _ = out.Close() }()
-	remaining := maxExtractedBytes - guard.bytes
+	remaining := guard.maxBytes - guard.bytes
 	written, err := io.Copy(out, io.LimitReader(reader, remaining+1))
 	if err != nil {
 		return &output.InstallError{Err: err}

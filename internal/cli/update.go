@@ -24,7 +24,7 @@ func newUpdateCommand(opts *Options) *cobra.Command {
 					return &UsageError{Err: fmt.Errorf("unknown addon %q", name)}
 				}
 			}
-			runner := NewRunner(discovered.AddonsDir, discovered.LockPath)
+			runner := NewRunner(discovered.AddonsDir, discovered.LockPath, limitsFor(opts))
 			results, err := runner.InstallAddons(cmd.Context(), addonManifest, args, ModeUpdate)
 			if err != nil {
 				return err

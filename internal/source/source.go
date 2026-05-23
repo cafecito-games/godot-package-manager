@@ -21,16 +21,32 @@ type Fetcher interface {
 	Fetch(ctx context.Context, spec manifest.AddonSpec) (FetchResult, error)
 }
 
-// FetcherFor returns the Fetcher matching the spec's source type.
+// Limits overrides the default download and extraction size caps. A zero value
+// for any field falls back to the package default.
+type Limits struct {
+	MaxDownloadBytes  int64
+	MaxExtractedBytes int64
+}
+
+// FetcherFor returns the Fetcher matching the spec's source type using the
+// package's default size limits.
 func FetcherFor(spec manifest.AddonSpec) (Fetcher, error) {
-	switch spec.Source {
-	case manifest.SourceGit:
-		return &GitFetcher{}, nil
-	case manifest.SourceArchive:
-		return &ArchiveFetcher{}, nil
-	case manifest.SourceGitHubRelease:
-		return &GitHubReleaseFetcher{}, nil
-	default:
-		return nil, &output.FetchError{Err: fmt.Errorf("no fetcher for source %q", spec.Source)}
+	return FetcherForWithLimits(Limits{})(spec)
+}
+
+// FetcherForWithLimits returns a factory that produces fetchers configured with
+// the given size limits. A zero Limits value matches the behavior of FetcherFor.
+func FetcherForWithLimits(limits Limits) func(manifest.AddonSpec) (Fetcher, error) {
+	return func(spec manifest.AddonSpec) (Fetcher, error) {
+		switch spec.Source {
+		case manifest.SourceGit:
+			return &GitFetcher{}, nil
+		case manifest.SourceArchive:
+			return &ArchiveFetcher{maxBytes: limits.MaxDownloadBytes, maxExtracted: limits.MaxExtractedBytes}, nil
+		case manifest.SourceGitHubRelease:
+			return &GitHubReleaseFetcher{maxBytes: limits.MaxDownloadBytes, maxExtracted: limits.MaxExtractedBytes}, nil
+		default:
+			return nil, &output.FetchError{Err: fmt.Errorf("no fetcher for source %q", spec.Source)}
+		}
 	}
 }
