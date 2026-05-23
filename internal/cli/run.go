@@ -38,9 +38,10 @@ type Runner struct {
 	FetcherFor func(manifest.AddonSpec) (source.Fetcher, error)
 }
 
-// NewRunner builds a Runner wired to the real source layer.
-func NewRunner(addonsDir, lockPath string) *Runner {
-	return &Runner{AddonsDir: addonsDir, LockPath: lockPath, FetcherFor: source.FetcherFor}
+// NewRunner builds a Runner wired to the real source layer using the given
+// size limits. A zero source.Limits value yields the built-in defaults.
+func NewRunner(addonsDir, lockPath string, limits source.Limits) *Runner {
+	return &Runner{AddonsDir: addonsDir, LockPath: lockPath, FetcherFor: source.FetcherForWithLimits(limits)}
 }
 
 // InstallAddons fetches and installs the named addons (all addons when names is

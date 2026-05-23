@@ -11,8 +11,17 @@ import (
 	"syscall"
 
 	"github.com/cafecito-games/godot-package-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/source"
 	"github.com/spf13/cobra"
 )
+
+// limitsFor builds source.Limits from the shared CLI options.
+func limitsFor(opts *Options) source.Limits {
+	return source.Limits{
+		MaxDownloadBytes:  opts.MaxDownloadBytes,
+		MaxExtractedBytes: opts.MaxExtractedBytes,
+	}
+}
 
 // version is the build version of gpm. It is "dev" for builds from source and
 // is overridden at release time via -ldflags.
@@ -20,9 +29,11 @@ var version = "dev"
 
 // Options holds global flags shared by all subcommands.
 type Options struct {
-	JSON    bool
-	Verbose bool
-	Quiet   bool
+	JSON              bool
+	Verbose           bool
+	Quiet             bool
+	MaxDownloadBytes  int64
+	MaxExtractedBytes int64
 }
 
 // UsageError marks an error caused by bad flags or arguments (exit code 2).
@@ -54,6 +65,10 @@ func newRootCommand(opts *Options) *cobra.Command {
 	root.PersistentFlags().BoolVar(&opts.JSON, "json", false, "emit machine-readable JSON output")
 	root.PersistentFlags().BoolVarP(&opts.Verbose, "verbose", "v", false, "enable verbose logging")
 	root.PersistentFlags().BoolVarP(&opts.Quiet, "quiet", "q", false, "suppress non-error output")
+	root.PersistentFlags().Var((*bytesizeValue)(&opts.MaxDownloadBytes), "max-download-size",
+		"maximum compressed download size (e.g. 512MB, 1GiB); 0 uses the built-in default")
+	root.PersistentFlags().Var((*bytesizeValue)(&opts.MaxExtractedBytes), "max-extract-size",
+		"maximum total uncompressed archive size (e.g. 1GiB); 0 uses the built-in default")
 	// Each subcommand receives opts so all commands share the same flag values.
 	root.AddCommand(newInitCommand(opts))
 	root.AddCommand(newInstallCommand(opts))

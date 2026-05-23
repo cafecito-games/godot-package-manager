@@ -20,7 +20,7 @@ func newInstallCommand(opts *Options) *cobra.Command {
 				return err
 			}
 			verbosef(cmd, opts, "project: %s\nmanifest: %s\nlockfile: %s\n", discovered.Root, discovered.ManifestPath, discovered.LockPath)
-			runner := NewRunner(discovered.AddonsDir, discovered.LockPath)
+			runner := NewRunner(discovered.AddonsDir, discovered.LockPath, limitsFor(opts))
 			results, err := runner.InstallAddons(cmd.Context(), addonManifest, nil, ModeInstall)
 			if err != nil {
 				return err
