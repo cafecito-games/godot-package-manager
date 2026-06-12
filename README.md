@@ -1,5 +1,12 @@
 # gpm - Godot Package Manager
 
+[![CI](https://github.com/cafecito-games/godot-package-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/cafecito-games/godot-package-manager/actions/workflows/ci.yml)
+[![Docs](https://github.com/cafecito-games/godot-package-manager/actions/workflows/docs.yml/badge.svg)](https://github.com/cafecito-games/godot-package-manager/actions/workflows/docs.yml)
+[![Latest Release](https://img.shields.io/github/v/release/cafecito-games/godot-package-manager?display_name=tag&sort=semver)](https://github.com/cafecito-games/godot-package-manager/releases/latest)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cafecito-games/godot-package-manager.svg)](https://pkg.go.dev/github.com/cafecito-games/godot-package-manager)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/cafecito-games/godot-package-manager)](https://github.com/cafecito-games/godot-package-manager/blob/main/go.mod)
+[![License](https://img.shields.io/github/license/cafecito-games/godot-package-manager)](https://github.com/cafecito-games/godot-package-manager/blob/main/LICENSE)
+
 `gpm` is a command-line addon manager for Godot projects. It installs addons
 declared in `addons.toml` into your project's `addons/` directory and writes an
 `addons.lock` file for reproducible installs across machines and CI.
