@@ -2,6 +2,8 @@ package manifest
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/cafecito-games/godot-package-manager/internal/output"
@@ -116,6 +118,26 @@ func TestValidateRejectsEscapingSourcePath(t *testing.T) {
 	require.Error(t, err)
 	var me *output.ManifestError
 	require.True(t, errors.As(err, &me))
+}
+
+func TestValidateRejectsEscapingExclude(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "addons.toml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+[addons]
+[addons.dialogue_manager]
+source = "archive"
+url = "https://example.com/dialogue.zip"
+exclude = ["../outside"]
+`), 0o644))
+
+	m, err := Load(path)
+	require.NoError(t, err)
+
+	err = m.Validate()
+	require.Error(t, err)
+	var me *output.ManifestError
+	require.True(t, errors.As(err, &me))
+	require.Contains(t, err.Error(), "exclude")
 }
 
 func TestValidateAcceptsNormalAddon(t *testing.T) {

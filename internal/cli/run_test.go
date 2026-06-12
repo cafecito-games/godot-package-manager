@@ -22,6 +22,21 @@ func (f fakeFetcher) Fetch(_ context.Context, _ manifest.AddonSpec) (source.Fetc
 	return source.FetchResult{Dir: dir, ResolvedVersion: f.version, Checksum: f.checksum}, nil
 }
 
+type treeFetcher struct {
+	version string
+	files   map[string]string
+}
+
+func (f treeFetcher) Fetch(_ context.Context, _ manifest.AddonSpec) (source.FetchResult, error) {
+	dir, _ := os.MkdirTemp("", "fake-tree-*")
+	for relative, body := range f.files {
+		path := filepath.Join(dir, relative)
+		_ = os.MkdirAll(filepath.Dir(path), 0o755)
+		_ = os.WriteFile(path, []byte(body), 0o644)
+	}
+	return source.FetchResult{Dir: dir, ResolvedVersion: f.version}, nil
+}
+
 func TestInstallAddons(t *testing.T) {
 	projectRoot := t.TempDir()
 	addonsDir := filepath.Join(projectRoot, "addons")
@@ -50,6 +65,50 @@ func TestInstallAddons(t *testing.T) {
 	require.Equal(t, "1.0", lock.Addons["dlg"].ResolvedVersion)
 	require.Equal(t, "deadbeef", lock.Addons["dlg"].Checksum)
 	require.Equal(t, m.Addons["dlg"].Hash(), lock.Addons["dlg"].SpecHash)
+}
+
+func TestInstallAddonsHonorsManifestExclusions(t *testing.T) {
+	projectRoot := t.TempDir()
+	manifestPath := filepath.Join(projectRoot, "addons.toml")
+	require.NoError(t, os.WriteFile(manifestPath, []byte(`
+[addons]
+[addons.dlg]
+source = "archive"
+url = "https://example.com/dlg.zip"
+exclude = ["dotnet", "bindings/dotnet"]
+`), 0o644))
+
+	m, err := manifest.Load(manifestPath)
+	require.NoError(t, err)
+
+	addonsDir := filepath.Join(projectRoot, "addons")
+	r := &Runner{
+		AddonsDir: addonsDir,
+		LockPath:  filepath.Join(projectRoot, "addons.lock"),
+		FetcherFor: func(manifest.AddonSpec) (source.Fetcher, error) {
+			return treeFetcher{
+				version: "1.0",
+				files: map[string]string{
+					"plugin.cfg":                   "[plugin]",
+					"dotnet/generated.cs":          "skip",
+					"bindings/dotnet/generated.cs": "skip nested",
+					"bindings/gdscript/runtime.gd": "keep",
+				},
+			}, nil
+		},
+	}
+
+	_, err = r.InstallAddons(context.Background(), m, nil, ModeInstall)
+	require.NoError(t, err)
+
+	_, err = os.Stat(filepath.Join(addonsDir, "dlg", "plugin.cfg"))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(addonsDir, "dlg", "bindings", "gdscript", "runtime.gd"))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(addonsDir, "dlg", "dotnet"))
+	require.True(t, os.IsNotExist(err), "top-level excluded directory should not be installed")
+	_, err = os.Stat(filepath.Join(addonsDir, "dlg", "bindings", "dotnet"))
+	require.True(t, os.IsNotExist(err), "nested excluded directory should not be installed")
 }
 
 func TestInstallAddonsNamedSubset(t *testing.T) {

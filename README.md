@@ -95,7 +95,15 @@ them as `archive` entries in `addons.toml`.
 
 Use `source_path` when the addon lives inside a subdirectory of the fetched
 source, and `install_as` when the installed directory name should differ from
-the manifest key.
+the manifest key. Use `exclude` to skip addon subdirectories you do not want
+installed:
+
+```toml
+[addons.some_addon]
+source = "archive"
+url = "https://example.com/some-addon.zip"
+exclude = ["dotnet"]
+```
 
 ## Development
 
