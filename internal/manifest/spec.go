@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sort"
+	"strings"
 )
 
 // SourceType identifies how an addon is obtained.
@@ -27,6 +29,7 @@ type AddonSpec struct {
 	Asset      string     `toml:"asset,omitempty"`
 	SourcePath string     `toml:"source_path,omitempty"`
 	InstallAs  string     `toml:"install_as,omitempty"`
+	Exclude    []string   `toml:"exclude,omitempty"`
 	// Checksum, when set, is the expected SHA-256 (64 lowercase hex digits) of
 	// the downloaded archive or release asset. It is verified on every fetch,
 	// including the first, for archive and github-release sources.
@@ -49,8 +52,10 @@ func (s AddonSpec) InstallName() string {
 // Hash returns a stable hash of the spec's resolvable fields, used to detect
 // drift between addons.toml and addons.lock.
 func (s AddonSpec) Hash() string {
-	representation := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s",
-		s.Source, s.URL, s.Repo, s.Version, s.Asset, s.SourcePath, s.InstallAs, s.Checksum)
+	exclude := append([]string(nil), s.Exclude...)
+	sort.Strings(exclude)
+	representation := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s",
+		s.Source, s.URL, s.Repo, s.Version, s.Asset, s.SourcePath, s.InstallAs, s.Checksum, strings.Join(exclude, "\x00"))
 	checksum := sha256.Sum256([]byte(representation))
 	return hex.EncodeToString(checksum[:])
 }

@@ -16,6 +16,7 @@ url = "https://github.com/nathanhoad/godot_dialogue_manager.git"
 version = "v2.1.0"
 source_path = "addons/dialogue_manager"
 install_as = "dialogue_manager"
+exclude = ["dotnet"]
 ```
 
 `version` can be a tag, branch, or commit SHA. For reproducible installs,
@@ -74,6 +75,7 @@ archive layout needs the same disambiguation as any other archive source.
 | `asset` | `github-release` | no | Asset name or glob; required when more than one asset matches. |
 | `source_path` | all | no | Subdirectory inside the fetched tree to install. |
 | `install_as` | all | no | Directory name under `addons/`; defaults to the table key. |
+| `exclude` | all | no | Directories under the selected install root to skip. |
 | `checksum` | `github-release`, `archive` | no | Expected SHA-256 of the downloaded archive or release asset. |
 
 ## source_path Auto-Detection
@@ -86,6 +88,20 @@ When `source_path` is omitted, `gpm` inspects the fetched tree:
 If the source has multiple addon directories under `addons/`, set
 `source_path` explicitly so the install target is unambiguous.
 
+## Install Exclusions
+
+Use `exclude` to skip directories inside the selected install root:
+
+```toml
+[addons.some_addon]
+source = "archive"
+url = "https://example.com/some-addon.zip"
+exclude = ["dotnet", "bindings/dotnet"]
+```
+
+Exclusions are relative to the directory chosen by `source_path` or
+auto-detection. Missing exclusion directories are ignored.
+
 ## Validation
 
 `gpm` validates manifests before fetching:
@@ -94,5 +110,7 @@ If the source has multiple addon directories under `addons/`, set
 - GitHub release sources require `repo` and `version`.
 - Archive sources require an HTTP(S) `url`.
 - `source_path` cannot be absolute or escape the fetched root with `..`.
+- `exclude` entries cannot be empty, absolute, the install root itself, or
+  escape the install root with `..`.
 - `checksum` must be a 64-character lowercase SHA-256 digest and is not valid
   for Git sources.

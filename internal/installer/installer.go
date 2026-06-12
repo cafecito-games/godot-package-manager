@@ -43,7 +43,7 @@ func Install(fetched source.FetchResult, spec manifest.AddonSpec, addonsDir stri
 		return &output.InstallError{Err: err}
 	}
 
-	if err := copyTree(sourceRoot, staging); err != nil {
+	if err := copyTree(sourceRoot, staging, spec.Exclude); err != nil {
 		_ = os.RemoveAll(staging)
 		return &output.InstallError{Err: err}
 	}
@@ -158,18 +158,29 @@ func resolveSourcePath(root, sourcePath string) (string, error) {
 
 // copyTree recursively copies the directory src to dst.
 // Symlinks anywhere in the tree are rejected to prevent host-file exposure.
-func copyTree(src, dst string) error {
+func copyTree(src, dst string, excludeDirs []string) error {
+	excludeSet := make(map[string]struct{}, len(excludeDirs))
+	for _, excludeDir := range excludeDirs {
+		excludeSet[cleanExcludeDir(excludeDir)] = struct{}{}
+	}
+
 	return filepath.WalkDir(src, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return &output.InstallError{Err: fmt.Errorf(
-				"addon source contains an unsupported symlink: %s", entry.Name())}
-		}
 		relative, err := filepath.Rel(src, path)
 		if err != nil {
 			return err
+		}
+		relative = filepath.Clean(relative)
+		if entry.IsDir() {
+			if _, excluded := excludeSet[relative]; excluded {
+				return filepath.SkipDir
+			}
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return &output.InstallError{Err: fmt.Errorf(
+				"addon source contains an unsupported symlink: %s", entry.Name())}
 		}
 		target := filepath.Join(dst, relative)
 		if entry.IsDir() {
@@ -181,6 +192,10 @@ func copyTree(src, dst string) error {
 		}
 		return copyFile(path, target, info.Mode())
 	})
+}
+
+func cleanExcludeDir(excludeDir string) string {
+	return filepath.Clean(filepath.FromSlash(strings.ReplaceAll(excludeDir, `\`, `/`)))
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {

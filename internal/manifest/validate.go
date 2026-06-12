@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -52,6 +53,35 @@ func validateSourcePath(sourcePath string) error {
 		return fmt.Errorf("source_path %q must not escape the source root", sourcePath)
 	}
 	return nil
+}
+
+// validateExcludePath rejects exclude values that do not identify a directory
+// below the selected install root.
+func validateExcludePath(excludePath string) error {
+	if excludePath == "" {
+		return fmt.Errorf("exclude path must not be empty")
+	}
+	normalized := strings.ReplaceAll(excludePath, `\`, `/`)
+	if filepath.IsAbs(excludePath) || strings.HasPrefix(normalized, "/") || hasWindowsDrivePrefix(normalized) {
+		return fmt.Errorf("exclude path %q must not be an absolute path", excludePath)
+	}
+	for _, component := range strings.Split(normalized, "/") {
+		if component == ".." {
+			return fmt.Errorf("exclude path %q must not escape the install root", excludePath)
+		}
+	}
+	if path.Clean(normalized) == "." {
+		return fmt.Errorf("exclude path %q must name a directory below the install root", excludePath)
+	}
+	return nil
+}
+
+func hasWindowsDrivePrefix(value string) bool {
+	if len(value) < 2 || value[1] != ':' {
+		return false
+	}
+	first := value[0]
+	return (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z')
 }
 
 // sha256Pattern matches a bare SHA-256 digest: exactly 64 lowercase hex digits.
@@ -146,6 +176,11 @@ func validateSpec(name string, addon AddonSpec) error {
 	if addon.SourcePath != "" {
 		if err := validateSourcePath(addon.SourcePath); err != nil {
 			return fmt.Errorf("addon %q: invalid source_path: %w", name, err)
+		}
+	}
+	for _, excludePath := range addon.Exclude {
+		if err := validateExcludePath(excludePath); err != nil {
+			return fmt.Errorf("addon %q: invalid exclude: %w", name, err)
 		}
 	}
 	if addon.Checksum != "" {

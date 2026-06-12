@@ -36,6 +36,32 @@ func TestHashChangesWithFields(t *testing.T) {
 	require.NotEqual(t, a.Hash(), b.Hash())
 }
 
+func TestHashChangesWithManifestExclusions(t *testing.T) {
+	dir := t.TempDir()
+	withoutExclude := filepath.Join(dir, "without.toml")
+	require.NoError(t, os.WriteFile(withoutExclude, []byte(`
+[addons]
+[addons.dialogue]
+source = "archive"
+url = "https://example.com/dialogue.zip"
+`), 0o644))
+	withExclude := filepath.Join(dir, "with.toml")
+	require.NoError(t, os.WriteFile(withExclude, []byte(`
+[addons]
+[addons.dialogue]
+source = "archive"
+url = "https://example.com/dialogue.zip"
+exclude = ["dotnet"]
+`), 0o644))
+
+	a, err := Load(withoutExclude)
+	require.NoError(t, err)
+	b, err := Load(withExclude)
+	require.NoError(t, err)
+
+	require.NotEqual(t, a.Addons["dialogue"].Hash(), b.Addons["dialogue"].Hash())
+}
+
 func TestLoadMissingFile(t *testing.T) {
 	_, err := Load(filepath.Join(t.TempDir(), "nonexistent.toml"))
 	require.Error(t, err)
