@@ -6,10 +6,10 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/cafecito-games/godot-package-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/slice"
 )
 
 // Validate checks every addon entry for required and consistent fields.
@@ -84,18 +84,11 @@ func hasWindowsDrivePrefix(value string) bool {
 	return (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z')
 }
 
-// sha256Pattern matches a bare SHA-256 digest: exactly 64 lowercase hex digits.
-var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
-
-// ValidateChecksum rejects checksum values that are not a bare SHA-256 digest.
-// It is exported because it is the single owner of the SHA-256 format rule:
-// every other package that validates a digest calls it rather than declaring a
-// second pattern.
-func ValidateChecksum(checksum string) error {
-	if !sha256Pattern.MatchString(checksum) {
-		return fmt.Errorf("checksum %q must be 64 lowercase hex digits (SHA-256)", checksum)
-	}
-	return nil
+// validateChecksum rejects checksum values that are not a bare SHA-256 digest.
+// The format rule itself lives in internal/slice, the lowest layer that needs
+// it, so the repository holds exactly one SHA-256 pattern.
+func validateChecksum(checksum string) error {
+	return slice.ValidateChecksum(checksum)
 }
 
 // scpLikeGitURL reports whether s is a git SCP-style location ([user@]host:path)
@@ -190,7 +183,7 @@ func validateSpec(name string, addon AddonSpec) error {
 		if addon.Source == SourceGit {
 			return fmt.Errorf("addon %q: checksum is not supported for git sources", name)
 		}
-		if err := ValidateChecksum(addon.Checksum); err != nil {
+		if err := validateChecksum(addon.Checksum); err != nil {
 			return fmt.Errorf("addon %q: invalid checksum: %w", name, err)
 		}
 	}

@@ -175,6 +175,34 @@ mystery = "value"
 			contains: []string{"frameworks", "libraries", "dependencies"},
 		},
 		{
+			name:     "case-variant top-level key",
+			document: strings.Replace(validIndexTOML, `name = "limboai"`, `Name = "limboai"`, 1),
+			contains: []string{"Name"},
+		},
+		{
+			name:     "case-variant per-slice key",
+			document: strings.Replace(validIndexTOML, `file = "limboai-1.4.0-ios.arm64.zip"`, `File = "limboai-1.4.0-ios.arm64.zip"`, 1),
+			contains: []string{"File"},
+		},
+		{
+			name:     "case-variant partitioned section",
+			document: validIndexTOML + "\n[slices.\"ios.arm64\".Libraries.\"limboai.gdextension\"]\n\"ios\" = \"res://addons/limboai/bin/libai.a\"\n",
+			contains: []string{"Libraries"},
+		},
+		{
+			name: "format above the supported maximum with an incompatible field type",
+			document: `format = 2
+name = "limboai"
+version = "1.4.0"
+
+[slices.core]
+file = "limboai-1.4.0-core.zip"
+sha256 = "` + coreSliceDigest + `"
+size = "182344"
+`,
+			contains: []string{"format", "2", "1"},
+		},
+		{
 			name: "slices absent",
 			document: `format = 1
 name = "limboai"
@@ -347,6 +375,11 @@ func TestIndexRejectsMalformedPartitionedSections(t *testing.T) {
 					name:     "core slice carries entries",
 					document: coreSliceWithSection(section),
 					contains: []string{"core", string(section)},
+				},
+				{
+					name:     "section table is present but empty",
+					document: validIndexTOML + "\n[slices.\"ios.arm64\"." + string(section) + "]\n",
+					contains: []string{string(section)},
 				},
 				{
 					name:     "inner table is empty",

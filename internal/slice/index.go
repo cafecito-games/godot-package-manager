@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/cafecito-games/godot-package-manager/internal/manifest"
 	"github.com/cafecito-games/godot-package-manager/internal/output"
 )
 
@@ -84,6 +85,21 @@ func (indexSlice *IndexSlice) Section(section ExtensionSection) map[string]map[s
 	}
 }
 
+// sha256Pattern matches a bare SHA-256 digest: exactly 64 lowercase hex digits.
+// It is the repository's only SHA-256 format pattern, and it lives here because
+// this is the lowest layer that validates a digest: internal/slice depends only
+// on the standard library, the TOML library, and internal/output, so every
+// higher layer can call into it without an import cycle.
+var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// ValidateChecksum rejects checksum values that are not a bare SHA-256 digest.
+func ValidateChecksum(checksum string) error {
+	if !sha256Pattern.MatchString(checksum) {
+		return fmt.Errorf("checksum %q must be 64 lowercase hex digits (SHA-256)", checksum)
+	}
+	return nil
+}
+
 // IndexChecksum returns the SHA-256 digest of raw index bytes as lowercase hex.
 // It is computed over the bytes as downloaded, before parsing, so the digest
 // recorded in a lockfile pins the exact document and a change that alters
@@ -102,13 +118,26 @@ func IndexChecksum(data []byte) string {
 // rejected index yields a nil *Index, so no partially interpreted index is ever
 // reachable by a caller.
 func LoadIndex(data []byte) (*Index, error) {
+	// format is decoded on its own first. Decoding the whole schema up front
+	// would turn a newer index whose known keys changed type into a generic
+	// decoding failure, hiding the one diagnosis that helps: the format is newer
+	// than this gpm. A probe that declares only format leaves every other key
+	// undecoded, so no other key is type-checked yet.
+	var probe struct {
+		Format int `toml:"format"`
+	}
+	probeMetaData, err := toml.Decode(string(data), &probe)
+	if err != nil {
+		return nil, fetchErrorf("parsing index: %w", err)
+	}
+	if err := validateIndexFormat(probe.Format, probeMetaData); err != nil {
+		return nil, err
+	}
+
 	index := &Index{}
 	metaData, err := toml.Decode(string(data), index)
 	if err != nil {
 		return nil, fetchErrorf("parsing index: %w", err)
-	}
-	if err := validateIndexFormat(index, metaData); err != nil {
-		return nil, err
 	}
 	if err := rejectUnknownIndexKeys(metaData); err != nil {
 		return nil, err
@@ -122,17 +151,17 @@ func LoadIndex(data []byte) (*Index, error) {
 // validateIndexFormat checks format before any other field is interpreted. The
 // field is mandatory rather than defaulted, because an index that forgot it is a
 // producer bug and guessing format 1 would hide it.
-func validateIndexFormat(index *Index, metaData toml.MetaData) error {
+func validateIndexFormat(format int, metaData toml.MetaData) error {
 	if !metaData.IsDefined("format") {
 		return fetchErrorf("index declares no format; format is mandatory and is not defaulted")
 	}
-	if index.Format < 1 {
-		return fetchErrorf("invalid index format %d: format must be a positive integer", index.Format)
+	if format < 1 {
+		return fetchErrorf("invalid index format %d: format must be a positive integer", format)
 	}
-	if index.Format > SupportedIndexFormat {
+	if format > SupportedIndexFormat {
 		return fetchErrorf(
 			"unsupported index format %d: this gpm understands index format %d at most, so upgrade gpm to install this addon",
-			index.Format, SupportedIndexFormat,
+			format, SupportedIndexFormat,
 		)
 	}
 	return nil
@@ -142,6 +171,16 @@ func validateIndexFormat(index *Index, metaData toml.MetaData) error {
 // decoding is the point: a key silently ignored today could carry meaning in a
 // future format, and ignoring it would misread the index rather than report it.
 func rejectUnknownIndexKeys(metaData toml.MetaData) error {
+	// The TOML library matches a struct field case-insensitively when no exact
+	// match exists, and records the document's own spelling as decoded. TOML keys
+	// are case-sensitive, so a key that differs only in case is an unknown key
+	// that strict decoding alone would let through.
+	for _, key := range metaData.Keys() {
+		if err := rejectMisspelledIndexKey(key); err != nil {
+			return err
+		}
+	}
+
 	undecoded := metaData.Undecoded()
 	if len(undecoded) == 0 {
 		return nil
@@ -155,14 +194,64 @@ func rejectUnknownIndexKeys(metaData toml.MetaData) error {
 		}
 	}
 	if len(smallest) >= 3 && smallest[0] == "slices" {
-		return fetchErrorf(
-			"unknown key %q in index slice %q: format %d understands file, sha256, size, and the partitioned tables %s",
-			strings.Join(smallest[2:], "."), smallest[1], SupportedIndexFormat, describeSections(),
-		)
+		return unknownSliceKeyError(strings.Join(smallest[2:], "."), smallest[1])
 	}
+	return unknownIndexKeyError(strings.Join(smallest, "."))
+}
+
+// topLevelIndexKeys is the exact spelling of every key the index declares at the
+// top level.
+var topLevelIndexKeys = []string{"format", "name", "version", "slices"}
+
+// sliceFieldNames returns the exact spelling of every key a slice table declares,
+// reading the partitioned sections from their single declaration.
+func sliceFieldNames() []string {
+	names := []string{"file", "sha256", "size"}
+	for _, section := range PartitionedSections() {
+		names = append(names, string(section))
+	}
+	return names
+}
+
+// rejectMisspelledIndexKey checks one document key against the schema at the
+// position it appears in. Positions the schema leaves open — a slice ID, a
+// .gdextension path, a platform tag — are validated later as values, not here.
+func rejectMisspelledIndexKey(key toml.Key) error {
+	if len(key) == 0 {
+		return nil
+	}
+	if !slices.Contains(topLevelIndexKeys, key[0]) {
+		return unknownIndexKeyError(strings.Join(key, "."))
+	}
+	if key[0] != "slices" {
+		if len(key) > 1 {
+			return unknownIndexKeyError(strings.Join(key, "."))
+		}
+		return nil
+	}
+	if len(key) >= 3 && !slices.Contains(sliceFieldNames(), key[2]) {
+		return unknownSliceKeyError(strings.Join(key[2:], "."), key[1])
+	}
+	if len(key) >= 4 && !slices.Contains(partitionedSections, ExtensionSection(key[2])) {
+		return unknownSliceKeyError(strings.Join(key[2:], "."), key[1])
+	}
+	if len(key) > 5 {
+		return unknownSliceKeyError(strings.Join(key[2:], "."), key[1])
+	}
+	return nil
+}
+
+func unknownIndexKeyError(key string) error {
 	return fetchErrorf(
 		"unknown key %q in index: format %d understands format, name, version, and [slices]",
-		strings.Join(smallest, "."), SupportedIndexFormat,
+		key, SupportedIndexFormat,
+	)
+}
+
+func unknownSliceKeyError(key, sliceKey string) error {
+	return fetchErrorf(
+		"unknown key %q in index slice %q: format %d understands file, sha256, size, and the partitioned tables %s",
+		key, sliceKey, SupportedIndexFormat, describeSections(),
 	)
 }
 
@@ -239,7 +328,7 @@ func validateIndexSlice(key string, id SliceID, indexSlice *IndexSlice) error {
 	if err := validateArchiveFileName(indexSlice.File); err != nil {
 		return fetchErrorf("index slice %q: %s", key, err)
 	}
-	if err := manifest.ValidateChecksum(indexSlice.SHA256); err != nil {
+	if err := ValidateChecksum(indexSlice.SHA256); err != nil {
 		return fetchErrorf("index slice %q: invalid sha256: %s", key, err)
 	}
 	if indexSlice.Size <= 0 {
@@ -279,8 +368,17 @@ func validateArchiveFileName(file string) error {
 // identical for every section, which is why the section is a parameter rather
 // than a copy of this function per table.
 func validateSection(key string, id SliceID, section ExtensionSection, table map[string]map[string]string) error {
-	if len(table) == 0 {
+	if table == nil {
 		return nil
+	}
+	// An empty table is distinguished from an absent one: the writer omits an
+	// absent section, so accepting a declared-but-empty one would make
+	// load, save, load return an index that is not equal to the one accepted.
+	if len(table) == 0 {
+		return fetchErrorf(
+			"index slice %q declares an empty %s table; a section with no entries is omitted rather than declared",
+			key, section,
+		)
 	}
 	if id.IsCore() {
 		return fetchErrorf(
