@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/cafecito-games/godot-package-manager/internal/output"
 	"github.com/cafecito-games/godot-package-manager/internal/packager"
 	"github.com/cafecito-games/godot-package-manager/internal/slice"
 )
@@ -544,4 +545,69 @@ version    = "1.2.3"
 	for path := range carriers {
 		require.True(t, walked[path], "%s is archived but is not a file under addon_path", path)
 	}
+}
+
+func TestPackageWritesTheIndexOnlyAfterEveryArchiveExists(t *testing.T) {
+	root := writeAddon(t, `
+[package]
+name       = "addon"
+addon_path = "addons/addon"
+version    = "1.2.3"
+`, map[string]string{"addons/addon/plugin.gd": "extends Node\n"})
+	outputDirectory := t.TempDir()
+	// The directory exists, so it is not created, but no archive can be written
+	// into it. The index must not appear.
+	require.NoError(t, os.Chmod(outputDirectory, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(outputDirectory, 0o755) })
+
+	_, err := packager.Package(packager.Options{Directory: root, OutputDirectory: outputDirectory})
+	require.Error(t, err)
+	require.Equal(t, output.ExitInstall, output.CodeFor(err))
+	_, statErr := os.Stat(filepath.Join(outputDirectory, packager.IndexFileName))
+	require.True(t, os.IsNotExist(statErr), "the index was written before its archives")
+}
+
+func TestPackageWritesNothingOutsideTheOutputDirectory(t *testing.T) {
+	root := writeAddon(t, `
+[package]
+name       = "addon"
+addon_path = "addons/addon"
+version    = "1.2.3"
+`, map[string]string{
+		"addons/addon/addon.gdextension":      multiPlatformExtension,
+		"addons/addon/plugin.gd":              "extends Node\n",
+		"addons/addon/bin/addon_windows.dll":  "windows",
+		"addons/addon/bin/addon_linux.so":     "linux",
+		"addons/addon/bin/addon_ios.dylib":    "ios",
+		"addons/addon/bin/libgodot-cpp_ios.a": "ios dependency",
+		"addons/addon/bin/libextra_ios.a":     "ios extra dependency",
+	})
+	before := treeSnapshot(t, root)
+
+	outputDirectory := t.TempDir()
+	_, err := packager.Package(packager.Options{Directory: root, OutputDirectory: outputDirectory})
+	require.NoError(t, err)
+
+	require.Equal(t, before, treeSnapshot(t, root), "the addon repository was modified")
+}
+
+// treeSnapshot records every path under root with its content, so a test can
+// assert the tree was not touched.
+func treeSnapshot(t *testing.T, root string) map[string]string {
+	t.Helper()
+	snapshot := map[string]string{}
+	require.NoError(t, filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		require.NoError(t, err)
+		relative, err := filepath.Rel(root, path)
+		require.NoError(t, err)
+		if info.IsDir() {
+			snapshot[relative] = "<dir>"
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		require.NoError(t, err)
+		snapshot[relative] = string(content)
+		return nil
+	}))
+	return snapshot
 }
