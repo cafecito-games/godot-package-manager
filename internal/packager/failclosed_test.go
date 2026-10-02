@@ -463,3 +463,46 @@ func TestPackageRefusesAnOutputDirectoryInsideTheAddonSubtree(t *testing.T) {
 	require.Equal(t, output.ExitManifest, output.CodeFor(err))
 	require.Contains(t, err.Error(), "inside the addon subtree")
 }
+
+func TestPackageRefusesAnOutputDirectorySymlinkedIntoTheAddonSubtree(t *testing.T) {
+	root := writeAddon(t, validConfig, minimalFiles())
+	outputDirectory := filepath.Join(t.TempDir(), "dist")
+	require.NoError(t, os.Symlink(filepath.Join(root, "addons", "addon"), outputDirectory))
+
+	_, err := packager.Package(packager.Options{Directory: root, OutputDirectory: outputDirectory})
+	require.Error(t, err)
+	require.Equal(t, output.ExitManifest, output.CodeFor(err))
+	require.Contains(t, err.Error(), "inside the addon subtree")
+}
+
+func TestPackageRemovesAStaleIndexBeforeWritingAnyArchive(t *testing.T) {
+	root := writeAddon(t, validConfig, minimalFiles())
+	outputDirectory := t.TempDir()
+	stale := filepath.Join(outputDirectory, packager.IndexFileName)
+	require.NoError(t, os.WriteFile(stale, []byte("format = 1\n"), 0o644))
+	// An unreadable source file fails the run while the archive is written, which
+	// is after the stale index was removed. An index that no longer describes the
+	// archives beside it must not survive a failed run, because it is the one
+	// output an author could upload without noticing it is wrong.
+	unreadable := filepath.Join(root, "addons", "addon", "plugin.gd")
+	require.NoError(t, os.Chmod(unreadable, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o644) })
+
+	_, err := packager.Package(packager.Options{Directory: root, OutputDirectory: outputDirectory})
+	require.Error(t, err)
+	_, statErr := os.Stat(stale)
+	require.True(t, os.IsNotExist(statErr), "a stale index survived a failed run")
+}
+
+func TestPackageRefusesANameThatCannotBeAnAssetName(t *testing.T) {
+	root := writeAddon(t, "[package]\nname = \"ad:don\"\naddon_path = \"addons/addon\"\nversion = \"1.2.3\"\n", minimalFiles())
+	outputDirectory := t.TempDir()
+
+	_, err := packager.Package(packager.Options{Directory: root, OutputDirectory: outputDirectory})
+	require.Error(t, err)
+	require.Equal(t, output.ExitManifest, output.CodeFor(err))
+	require.Contains(t, err.Error(), "colon")
+	remaining, readErr := os.ReadDir(outputDirectory)
+	require.NoError(t, readErr)
+	require.Empty(t, remaining, "a refused name still produced output")
+}

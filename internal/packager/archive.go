@@ -128,15 +128,56 @@ func writeArchiveEntry(writer *zip.Writer, file archiveFile) error {
 		}
 		return nil
 	}
-	source, err := os.Open(file.sourcePath)
+	source, err := openRegularFile(file.sourcePath)
 	if err != nil {
-		return installErrorf("reading %s: %s", file.sourcePath, err)
+		return err
 	}
 	defer func() { _ = source.Close() }()
 	if _, err := io.Copy(entry, source); err != nil {
 		return installErrorf("writing %s into the archive: %s", file.archivePath, err)
 	}
 	return nil
+}
+
+// openRegularFile opens an archive source and refuses anything that is not a
+// regular file.
+//
+// The tree walk already rejected every symlink and every irregular file it saw,
+// but it recorded paths rather than open file handles, so a path accepted then
+// is re-resolved here. Re-checking closes that gap: without it, a regular file
+// replaced by a symlink between the walk and the archive write would publish
+// whatever the link points at, which may be any readable file outside the addon
+// root. The open flag refuses the link where the platform has one, and the check
+// on the opened file refuses it everywhere.
+func openRegularFile(path string) (*os.File, error) {
+	// Reported as a manifest failure, matching what the tree walk says about a
+	// symlink: whatever changed under the packager, a link in the subtree is the
+	// author's tree to fix.
+	link, err := os.Lstat(path)
+	if err != nil {
+		return nil, installErrorf("reading %s: %s", path, err)
+	}
+	if !link.Mode().IsRegular() {
+		return nil, manifestErrorf(
+			"%s is not a regular file; a slice archive carries regular files only", path,
+		)
+	}
+	file, err := os.OpenFile(path, os.O_RDONLY|openNoFollow, 0)
+	if err != nil {
+		return nil, installErrorf("reading %s: %s", path, err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, installErrorf("reading %s: %s", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, manifestErrorf(
+			"%s is no longer a regular file; a slice archive carries regular files only", path,
+		)
+	}
+	return file, nil
 }
 
 // measureArchive returns an archive's SHA-256 digest as lowercase hex and its
@@ -165,4 +206,19 @@ func measureArchive(path string) (string, int64, error) {
 		)
 	}
 	return hex.EncodeToString(digest.Sum(nil)), size, nil
+}
+
+// readRegularFile reads a file through the same symlink guard an archive source
+// goes through, for content the packager reads rather than copies.
+func readRegularFile(path string) ([]byte, error) {
+	file, err := openRegularFile(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	content, err := io.ReadAll(file)
+	if err != nil {
+		return nil, installErrorf("reading %s: %s", path, err)
+	}
+	return content, nil
 }

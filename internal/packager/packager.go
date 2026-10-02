@@ -86,6 +86,14 @@ func Package(options Options) (*Result, error) {
 	if err := validateVersion(version); err != nil {
 		return nil, manifestErrorf("%s: %s", configPath, err)
 	}
+	// The name passed manifest.ValidateAddonName while the config was loaded,
+	// which is the rule for an addon's directory name. An archive's name is also
+	// a published asset name the index schema has its own rules for, and they are
+	// stricter in one respect, so the name is checked against them here rather
+	// than discovered when the emitted index is rejected.
+	if err := validateAssetNameComponent("[package] name", config.Package.Name); err != nil {
+		return nil, manifestErrorf("%s: %s", configPath, err)
+	}
 
 	addonRoot, err := resolveAddonRoot(repositoryRoot, config.Package.AddonPath)
 	if err != nil {
@@ -135,13 +143,23 @@ func Package(options Options) (*Result, error) {
 		return nil, err
 	}
 
+	// Removed before the first archive is written, so a run that fails partway
+	// leaves no index at all rather than one describing archives whose bytes have
+	// already been replaced. An index that no longer matches the archives beside
+	// it is the one output of this command an author could upload without
+	// noticing it is wrong.
+	indexPath := filepath.Join(outputDirectory, IndexFileName)
+	if err := os.Remove(indexPath); err != nil && !os.IsNotExist(err) {
+		return nil, installErrorf("removing the previous %s: %s", IndexFileName, err)
+	}
+
 	index := &slice.Index{
 		Format:  slice.SupportedIndexFormat,
 		Name:    config.Package.Name,
 		Version: version,
 		Slices:  map[string]*slice.IndexSlice{},
 	}
-	result := &Result{Name: config.Package.Name, Version: version, Index: filepath.Join(outputDirectory, IndexFileName)}
+	result := &Result{Name: config.Package.Name, Version: version, Index: indexPath}
 
 	for _, id := range publishedSliceIDs(coreID, membership, published, extras) {
 		files, err := archiveFilesOf(id, coreID, tree, membership[id], coreBodies)
@@ -201,9 +219,14 @@ func partitionExtensions(
 		if !strings.HasSuffix(file.relativePath, extensionSuffix) {
 			continue
 		}
-		content, err := os.ReadFile(file.sourcePath)
+		// Read through the same guard the archives use rather than with
+		// os.ReadFile, which follows a symlink: the tree walk recorded a path, and
+		// the file behind it is re-resolved here, so a .gdextension replaced by a
+		// link would otherwise partition a file from outside the addon root into
+		// the published core body.
+		content, err := readRegularFile(file.sourcePath)
 		if err != nil {
-			return nil, nil, manifestErrorf("reading %s: %s", file.relativePath, err)
+			return nil, nil, err
 		}
 		core, removed, err := slice.PartitionExtension(content, resourceRoot, file.relativePath)
 		if err != nil {
@@ -617,20 +640,47 @@ func prepareOutputDirectory(repositoryRoot, outputDirectory, addonRoot string) (
 		outputDirectory = filepath.Join(repositoryRoot, outputDirectory)
 	}
 	outputDirectory = filepath.Clean(outputDirectory)
-	// Refused rather than allowed and warned about: archives written inside the
-	// addon subtree would be part of the subtree on the next run, so one release
-	// would carry the previous release's archives in its core slice, and the
-	// author would have no way to tell from the output that it happened.
-	if outputDirectory == addonRoot || strings.HasPrefix(outputDirectory, addonRoot+string(filepath.Separator)) {
-		return "", manifestErrorf(
-			"the output directory %s is inside the addon subtree %s; archives written there would be packaged into the next release",
-			outputDirectory, addonRoot,
-		)
+	if err := requireOutsideAddonSubtree(outputDirectory, addonRoot); err != nil {
+		return "", err
 	}
 	if err := os.MkdirAll(outputDirectory, 0o755); err != nil {
 		return "", installErrorf("creating the output directory %s: %s", outputDirectory, err)
 	}
+	// Checked again once the directory exists, this time on both paths with every
+	// symlink resolved. The lexical check above catches the ordinary mistake
+	// before anything is created; this one catches an output path that only
+	// reaches the addon subtree through a link, which the lexical comparison
+	// cannot see, and it also makes the comparison sound on a platform where the
+	// repository itself sits under a symlinked prefix.
+	resolvedOutput, err := filepath.EvalSymlinks(outputDirectory)
+	if err != nil {
+		return "", installErrorf("resolving the output directory %s: %s", outputDirectory, err)
+	}
+	resolvedAddonRoot, err := filepath.EvalSymlinks(addonRoot)
+	if err != nil {
+		return "", installErrorf("resolving the addon subtree %s: %s", addonRoot, err)
+	}
+	if err := requireOutsideAddonSubtree(resolvedOutput, resolvedAddonRoot); err != nil {
+		return "", err
+	}
 	return outputDirectory, nil
+}
+
+// requireOutsideAddonSubtree refuses an output directory that is the addon
+// subtree or sits inside it.
+//
+// Refused rather than allowed and warned about: archives written inside the
+// addon subtree would be part of the subtree on the next run, so one release
+// would carry the previous release's archives in its core slice, and the author
+// would have no way to tell from the output that it happened.
+func requireOutsideAddonSubtree(outputDirectory, addonRoot string) error {
+	if outputDirectory != addonRoot && !strings.HasPrefix(outputDirectory, addonRoot+string(filepath.Separator)) {
+		return nil
+	}
+	return manifestErrorf(
+		"the output directory %s is inside the addon subtree %s; archives written there would be packaged into the next release",
+		outputDirectory, addonRoot,
+	)
 }
 
 // validateVersion rejects a version that is missing or that could not appear in
@@ -644,17 +694,33 @@ func validateVersion(version string) error {
 	if version == "" {
 		return fmt.Errorf("version is required; set [package] version or pass --version")
 	}
-	if strings.ContainsAny(version, `/\:`) {
-		return fmt.Errorf("version %q must not contain a path separator or a colon", version)
-	}
-	if strings.ContainsFunc(version, unicode.IsSpace) {
-		return fmt.Errorf("version %q must not contain whitespace", version)
-	}
-	if strings.ContainsFunc(version, func(character rune) bool { return character < ' ' || character == 0x7f }) {
-		return fmt.Errorf("version must not contain a control character")
-	}
 	if version == "." || version == ".." {
 		return fmt.Errorf("version %q is not a version", version)
+	}
+	return validateAssetNameComponent("version", version)
+}
+
+// validateAssetNameComponent rejects a value that could not appear in an
+// archive's file name.
+//
+// Both the addon name and the version are interpolated into
+// <name>-<version>-<slice>.zip, which the index publishes as a bare asset name a
+// consumer joins to a download location and to a staging directory. A separator,
+// a colon, whitespace, or a control character in either one would produce a name
+// no consumer can resolve, so both are checked before any archive is written
+// rather than when the emitted index is rejected.
+func validateAssetNameComponent(label, value string) error {
+	if strings.ContainsAny(value, `/\`) {
+		return fmt.Errorf("%s %q must not contain a path separator", label, value)
+	}
+	if strings.Contains(value, ":") {
+		return fmt.Errorf("%s %q must not contain a colon; an archive name is a bare asset name", label, value)
+	}
+	if strings.ContainsFunc(value, unicode.IsSpace) {
+		return fmt.Errorf("%s %q must not contain whitespace", label, value)
+	}
+	if strings.ContainsFunc(value, func(character rune) bool { return character < ' ' || character == 0x7f }) {
+		return fmt.Errorf("%s must not contain a control character", label)
 	}
 	return nil
 }

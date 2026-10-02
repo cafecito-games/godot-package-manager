@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/cafecito-games/godot-package-manager/internal/output"
 )
 
 func TestWriteArchiveEmitsOneSortedEntryPerRegularFile(t *testing.T) {
@@ -72,4 +74,20 @@ func TestWriteArchiveLeavesNoArchiveBehindWhenASourceIsUnreadable(t *testing.T) 
 	remaining, err := os.ReadDir(filepath.Dir(archivePath))
 	require.NoError(t, err)
 	require.Empty(t, remaining, "no temp file is left behind")
+}
+
+func TestWriteArchiveRefusesASourceThatIsASymlink(t *testing.T) {
+	directory := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret")
+	require.NoError(t, os.WriteFile(outside, []byte("secret"), 0o644))
+	source := filepath.Join(directory, "plugin.gd")
+	require.NoError(t, os.Symlink(outside, source))
+
+	archivePath := filepath.Join(t.TempDir(), "addon-core.zip")
+	err := writeArchive(archivePath, []archiveFile{{archivePath: "plugin.gd", sourcePath: source}})
+	require.Error(t, err)
+	require.Equal(t, output.ExitManifest, output.CodeFor(err))
+	require.Contains(t, err.Error(), "plugin.gd")
+	_, statErr := os.Stat(archivePath)
+	require.True(t, os.IsNotExist(statErr))
 }

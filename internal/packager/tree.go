@@ -59,6 +59,13 @@ func walkAddonTree(root string) (*addonTree, error) {
 			return manifestErrorf("reading the addon subtree at %s: %s", path, err)
 		}
 		if path == root {
+			// Checked explicitly rather than left to the walk: WalkDir lstats the
+			// root, so a root replaced by a symlink between resolveAddonRoot and
+			// here would simply not be descended into, and the run would report an
+			// addon with no files instead of what actually happened.
+			if !entry.IsDir() {
+				return manifestErrorf("the addon root %s is not a directory", root)
+			}
 			return nil
 		}
 		relativePath, err := filepath.Rel(root, path)
