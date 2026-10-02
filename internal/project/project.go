@@ -17,6 +17,7 @@ type Project struct {
 	Root         string // directory containing project.godot
 	ManifestPath string // <Root>/addons.toml
 	LockPath     string // <Root>/addons.lock
+	StatePath    string // <Root>/.gpm-state.toml, machine-local and gitignored
 	AddonsDir    string // <Root>/addons
 }
 
@@ -61,6 +62,7 @@ func forRoot(root string) *Project {
 		Root:         root,
 		ManifestPath: filepath.Join(root, "addons.toml"),
 		LockPath:     filepath.Join(root, "addons.lock"),
+		StatePath:    filepath.Join(root, ".gpm-state.toml"),
 		AddonsDir:    filepath.Join(root, "addons"),
 	}
 }
