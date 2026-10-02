@@ -1,0 +1,13 @@
+﻿[configuration]
+
+entry_symbol = "demo_init"
+compatibility_minimum = "4.2"
+
+[libraries]
+
+android.release.arm64 = "res://addons/demo/bin/libdemo.android.arm64.so"
+web.release.wasm32 = "res://addons/demo/bin/libdemo.web.wasm"
+
+[dependencies]
+
+android.release.arm64 = "res://addons/demo/bin/libsupport.android.arm64.so"

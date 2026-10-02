@@ -1,0 +1,16 @@
+[configuration]
+
+entry_symbol = "demo_init"
+compatibility_minimum = "4.2"
+
+[libraries]
+
+ios.template_release.arm64 = "res://addons/demo/bin/libdemo.ios.arm64.xcframework"
+ios.template_debug.arm64 = "res://addons/demo/bin/libdemo.ios.debug.arm64.xcframework"
+macos.debug = "res://addons/demo/bin/libdemo.macos.framework"
+windows.release.x86_64 = "res://addons/demo/bin/libdemo.windows.dll"
+
+[dependencies]
+
+ios.template_release.arm64 = "res://addons/demo/bin/libsupport.ios.arm64.a"
+macos.debug = "res://addons/demo/bin/libsupport.macos.dylib"
