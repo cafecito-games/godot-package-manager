@@ -161,13 +161,16 @@ func writeArchiveEntry(writer *zip.Writer, file archiveFile) error {
 // openRegularFile opens a file of the addon subtree and refuses anything that is
 // not the regular file the tree walk accepted.
 //
-// Two rules apply, and they close different gaps. The open goes through the
-// addon root's handle, so every component is resolved inside that root and a
+// Two rules apply, and they do different amounts of work. The open goes through
+// the addon root's handle, so every component is resolved inside that root and a
 // directory replaced by a symlink after the walk cannot make the path reach
-// outside it. The identity comparison then refuses a file that is no longer the
-// one the walk accepted at that name, which covers a swap that stays inside the
-// root and also reports an addon tree edited while it was being packaged rather
-// than publishing a release assembled from two states of it.
+// outside it; that part is a guarantee. The identity comparison beside it is
+// best effort: it reports a file that no longer has the device and inode the
+// walk recorded, which catches an addon tree edited while it was being packaged
+// often enough to be worth the two syscalls, but it is not a defense against a
+// deliberate swap. A replacement at the same path can be allocated the inode the
+// original just freed — Linux routinely does — and then the comparison succeeds.
+// The guarantee here is containment, not freshness.
 func openRegularFile(source fileSource) (*os.File, error) {
 	file, err := source.root.Open(source.name)
 	if err != nil {

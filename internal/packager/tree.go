@@ -20,8 +20,10 @@ type treeFile struct {
 	// executable records whether any execute bit is set on disk.
 	executable bool
 
-	// walkedInfo is the file the walk accepted, kept so that whatever is behind
-	// relativePath when the archive reads it can be checked to be that same file.
+	// walkedInfo is the file the walk accepted. It is compared against the file
+	// the archive later opens at the same name, which reports a tree edited
+	// mid-run when the replacement lands on a different inode. It is not a
+	// defense against a deliberate swap, because an inode can be reused.
 	walkedInfo fs.FileInfo
 }
 
@@ -143,13 +145,13 @@ func (tree *addonTree) walk() error {
 // openAddonRoot opens the addon subtree, descending one component of addonPath
 // at a time from the repository root.
 //
-// Each component is lstat-ed through its parent's handle, opened through that
-// same handle, and then the opened directory's identity is compared with the one
-// that was lstat-ed. Checking the whole path first and opening it afterwards
-// would leave the two describing different directories: a component replaced by
-// a symlink in between is followed by the open, and the walk that follows cannot
-// tell that its root was reached through a link. Comparing identities at every
-// step reports such a replacement instead of packaging a different subtree.
+// Each component is lstat-ed through its parent's handle and opened through that
+// same handle, so the check and the open address the same directory entry rather
+// than re-resolving a path: a component that is a symlink is refused before it
+// is descended into, and one that would escape the repository root cannot be
+// opened at all. The identity comparison that follows is best effort for the
+// same reason it is in openRegularFile — an inode can be reused, so it reports a
+// replacement rather than ruling one out.
 //
 // addonPath is already known to be a clean relative path, so it has no "." or
 // ".." component; "." names the repository root itself, which is what the tests

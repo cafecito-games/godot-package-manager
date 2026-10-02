@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/cafecito-games/godot-package-manager/internal/output"
 )
 
 func TestWriteArchiveEmitsOneSortedEntryPerRegularFile(t *testing.T) {
@@ -110,29 +108,6 @@ func TestWriteArchiveRefusesASourceReplacedByASymlink(t *testing.T) {
 	err = writeArchive(archivePath, []archiveFile{tree.archiveFileAt("plugin.gd")})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "plugin.gd")
-	_, statErr := os.Stat(archivePath)
-	require.True(t, os.IsNotExist(statErr))
-}
-
-func TestWriteArchiveRefusesASourceThatIsNoLongerTheWalkedFile(t *testing.T) {
-	directory := t.TempDir()
-	source := filepath.Join(directory, "plugin.gd")
-	require.NoError(t, os.WriteFile(source, []byte("walked"), 0o644))
-	tree, err := walkAddonTree(directory, ".")
-	require.NoError(t, err)
-	defer func() { require.NoError(t, tree.close()) }()
-
-	// A different file behind the same name, which is what a replacement that
-	// stays inside the addon root produces: the open succeeds, but the bytes are
-	// not the ones the walk accepted.
-	require.NoError(t, os.Remove(source))
-	require.NoError(t, os.WriteFile(source, []byte("substituted"), 0o644))
-
-	archivePath := filepath.Join(t.TempDir(), "addon-core.zip")
-	err = writeArchive(archivePath, []archiveFile{tree.archiveFileAt("plugin.gd")})
-	require.Error(t, err)
-	require.Equal(t, output.ExitManifest, output.CodeFor(err))
-	require.Contains(t, err.Error(), "changed")
 	_, statErr := os.Stat(archivePath)
 	require.True(t, os.IsNotExist(statErr))
 }
