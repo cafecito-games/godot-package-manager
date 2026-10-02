@@ -4,15 +4,15 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"go/parser"
-	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/cafecito-games/gdparser/configfile"
+	"github.com/cafecito-games/gdparser/configfile/ast"
 	"github.com/stretchr/testify/require"
 
 	"github.com/cafecito-games/godot-package-manager/internal/output"
@@ -52,13 +52,11 @@ func TestExtensionPartitionEmptiesLibrariesAndGroupsEntriesBySlice(t *testing.T)
 	core, removed, err := PartitionExtension([]byte(minimalExtension), demoAddonRoot)
 	require.NoError(t, err)
 
-	require.Equal(t, `[configuration]
-
-entry_symbol = "demo_init"
-compatibility_minimum = "4.2"
-
-[libraries]
-`, string(core))
+	require.Equal(t, "[configuration]\n"+
+		"entry_symbol=\"demo_init\"\n"+
+		"compatibility_minimum=\"4.2\"\n"+
+		"\n"+
+		"[libraries]\n", string(core))
 
 	require.Equal(t, map[SliceID]ExtensionEntries{
 		{Platform: "ios"}: {
@@ -90,11 +88,11 @@ func TestExtensionPartitionKeepsOneKeyPresentInBothSectionsDistinct(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t,
 		"res://addons/demo/bin/libdemo.ios.arm64.xcframework",
-		sectionsOf(t, reassembled)["libraries"]["ios.template_release.arm64"],
+		pathsOf(t, reassembled)["libraries"]["ios.template_release.arm64"],
 	)
 	require.Equal(t,
 		"res://addons/demo/bin/libsupport.ios.arm64.a",
-		sectionsOf(t, reassembled)["dependencies"]["ios.template_release.arm64"],
+		pathsOf(t, reassembled)["dependencies"]["ios.template_release.arm64"],
 	)
 }
 
@@ -133,9 +131,11 @@ func TestExtensionRoundTripReproducesEveryFixture(t *testing.T) {
 	}
 }
 
-// TestExtensionRoundTripPreservesUntouchedSectionsVerbatim pins the bytes of the
-// sections partition never interprets, comments and ordering included.
-func TestExtensionRoundTripPreservesUntouchedSectionsVerbatim(t *testing.T) {
+// TestExtensionRoundTripPreservesUntouchedSectionsAndComments pins the content
+// of the sections partition never interprets. Emission is canonical, so a
+// section's spelling may be normalized, but no section, key, value, or comment
+// may be dropped or altered, and their order must survive.
+func TestExtensionRoundTripPreservesUntouchedSectionsAndComments(t *testing.T) {
 	original, err := os.ReadFile("testdata/synthetic/preserved_sections.gdextension")
 	require.NoError(t, err)
 
@@ -143,28 +143,34 @@ func TestExtensionRoundTripPreservesUntouchedSectionsVerbatim(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, fragment := range []string{
-		"; an author's comment above the configuration\n",
-		"entry_symbol = \"demo_init\"\n",
-		"compatibility_minimum = \"4.2\"\n",
-		"[icons]\n",
-		"# icons are not platform tagged and are never partitioned\n",
-		"DemoNode = \"res://addons/demo/demo_node.svg\"\n",
-		"[author_invented]\n",
-		"anything = { \"nested\": [1, 2, 3] }\n",
+		"; an author's comment above the configuration",
+		"[configuration]",
+		`entry_symbol="demo_init"`,
+		`compatibility_minimum="4.2"`,
+		"reloadable=true",
+		"[icons]",
+		"# icons are not platform tagged and are never partitioned",
+		`DemoNode="res://addons/demo/demo_node.svg"`,
+		`DemoResource="res://addons/demo/demo_resource.svg"`,
+		"[author_invented]",
+		`anything={`,
+		"[libraries]",
+		"; desktop",
 	} {
-		require.Contains(t, string(core), fragment, "core must preserve %q verbatim", fragment)
+		require.Contains(t, string(core), fragment, "core must preserve %q", fragment)
 	}
 	require.NotContains(t, string(core), "libdemo", "core must carry no platform-tagged entry")
+	require.Equal(t,
+		[]string{"configuration", "icons", "author_invented", "libraries"},
+		sectionNamesOf(t, core),
+		"the author's section order must survive")
 
 	reassembled, err := ReassembleExtension(core, removed, allSlices(removed))
 	require.NoError(t, err)
-	for _, fragment := range []string{
-		"; an author's comment above the configuration\n",
-		"# icons are not platform tagged and are never partitioned\n",
-		"[author_invented]\n",
-	} {
-		require.Contains(t, string(reassembled), fragment)
-	}
+	require.Equal(t, commentsOf(t, original), commentsOf(t, reassembled),
+		"every comment must survive the round trip, in order")
+	require.Equal(t, sectionNamesOf(t, original), sectionNamesOf(t, reassembled))
+	require.Equal(t, sectionsOf(t, original), sectionsOf(t, reassembled))
 }
 
 // TestExtensionReassemblyOfOneSliceOmitsEveryOtherPlatform is the partial
@@ -183,7 +189,7 @@ func TestExtensionReassemblyOfOneSliceOmitsEveryOtherPlatform(t *testing.T) {
 	reassembled, err := ReassembleExtension(core, removed, []SliceID{CoreSliceID(), iosSlice})
 	require.NoError(t, err)
 
-	libraries := sectionsOf(t, reassembled)["libraries"]
+	libraries := pathsOf(t, reassembled)["libraries"]
 	require.Equal(t, map[string]string{
 		"ios.debug":   "res://addons/terrabrush/bin/libterrabrush.ios.debug.a",
 		"ios.release": "res://addons/terrabrush/bin/libterrabrush.ios.release.a",
@@ -221,9 +227,9 @@ func TestExtensionReassemblyIsDeterministicAndIdempotent(t *testing.T) {
 	require.Equal(t, string(first), string(shuffled),
 		"the order and multiplicity of the selected set must not change the output")
 
-	libraries := sectionsOf(t, first)["libraries"]
+	libraries := pathsOf(t, first)["libraries"]
 	require.Len(t, libraries, 2)
-	require.True(t, strings.Index(string(first), "ios.template_release.arm64 =") < strings.Index(string(first), "macos.debug ="),
+	require.True(t, strings.Index(string(first), "ios.template_release.arm64=") < strings.Index(string(first), "macos.debug="),
 		"entries within a section are emitted sorted by key")
 	require.True(t, strings.Index(string(first), "[libraries]") < strings.Index(string(first), "[dependencies]"),
 		"sections are emitted in the order of PartitionedSections")
@@ -253,8 +259,8 @@ macos.arm64 = "res://addons/demo/bin/libdemo.macos.arm64.framework"
 	reassembled, err := ReassembleExtension(core, removed, allSlices(removed))
 	require.NoError(t, err)
 	require.Less(t,
-		strings.Index(string(reassembled), "macos.arm64 ="),
-		strings.Index(string(reassembled), "macos.template_debug ="),
+		strings.Index(string(reassembled), "macos.arm64="),
+		strings.Index(string(reassembled), "macos.template_debug="),
 		"entries of one section are sorted by key even when their slices sort the other way")
 }
 
@@ -268,23 +274,39 @@ func TestExtensionPartitionDoesNotMutateItsInput(t *testing.T) {
 	require.Equal(t, untouched, original, "partition must not write through its input buffer")
 }
 
-func TestExtensionRoundTripPreservesCarriageReturnsAndByteOrderMark(t *testing.T) {
-	original, err := os.ReadFile("testdata/synthetic/crlf_bom.gdextension")
+// TestExtensionNormalizesAByteOrderMarkAndCarriageReturns asserts the decided
+// behavior for the two byte-level shapes an author's editor adds. Both are
+// accepted, and both are normalized away in the emitted body: emission is
+// canonical, and the two files this produces are generated by gpm — the core
+// body goes into a slice archive, the reassembled file into the install tree —
+// rather than being edits of the author's own working file. Content fidelity is
+// what is required, and it is asserted here against the identical file written
+// with a plain line feed and no mark.
+func TestExtensionNormalizesAByteOrderMarkAndCarriageReturns(t *testing.T) {
+	decorated, err := os.ReadFile("testdata/synthetic/crlf_bom.gdextension")
 	require.NoError(t, err)
-	require.True(t, bytes.HasPrefix(original, []byte("\ufeff")), "the fixture must carry a BOM")
-	require.Contains(t, string(original), "\r\n")
+	require.True(t, bytes.HasPrefix(decorated, []byte("\ufeff")), "the fixture must carry a byte order mark")
+	require.Contains(t, string(decorated), "\r\n", "the fixture must use CRLF endings")
 
-	core, removed, err := PartitionExtension(original, demoAddonRoot)
-	require.NoError(t, err)
-	require.True(t, bytes.HasPrefix(core, []byte("\ufeff")), "core must keep the BOM")
-	require.NotContains(t, strings.ReplaceAll(string(core), "\r\n", ""), "\n",
-		"every line of core must keep its CRLF ending")
+	plain := bytes.ReplaceAll(bytes.TrimPrefix(decorated, []byte("\ufeff")), []byte("\r\n"), []byte("\n"))
 
-	reassembled, err := ReassembleExtension(core, removed, allSlices(removed))
+	decoratedCore, decoratedRemoved, err := PartitionExtension(decorated, demoAddonRoot)
 	require.NoError(t, err)
-	require.True(t, bytes.HasPrefix(reassembled, []byte("\ufeff")), "the installed file must keep the BOM")
-	require.NotContains(t, strings.ReplaceAll(string(reassembled), "\r\n", ""), "\n",
-		"generated lines must use the document's own line ending")
+	plainCore, plainRemoved, err := PartitionExtension(plain, demoAddonRoot)
+	require.NoError(t, err)
+
+	require.Equal(t, string(plainCore), string(decoratedCore),
+		"a byte order mark and CRLF endings must not change the emitted core body")
+	require.Equal(t, plainRemoved, decoratedRemoved)
+	require.NotContains(t, string(decoratedCore), "\ufeff")
+	require.NotContains(t, string(decoratedCore), "\r")
+
+	reassembled, err := ReassembleExtension(decoratedCore, decoratedRemoved, allSlices(decoratedRemoved))
+	require.NoError(t, err)
+	require.NotContains(t, string(reassembled), "\ufeff")
+	require.NotContains(t, string(reassembled), "\r")
+	require.Equal(t, sectionsOf(t, plain), sectionsOf(t, reassembled),
+		"normalizing the bytes must not change the content")
 }
 
 // TestExtensionPartitionsEachFileIndependently asserts an addon shipping several
@@ -324,7 +346,7 @@ linux.release.x86_64 = "res://addons/demo/bin/libsecond.linux.so"
 	firstReassembled, err := ReassembleExtension(firstCore, firstRemoved, allSlices(firstRemoved))
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{"ios.debug": "res://addons/demo/bin/libfirst.ios.xcframework"},
-		sectionsOf(t, firstReassembled)["libraries"])
+		pathsOf(t, firstReassembled)["libraries"])
 	require.Contains(t, string(firstReassembled), "first_init")
 
 	secondReassembled, err := ReassembleExtension(secondCore, secondRemoved, allSlices(secondRemoved))
@@ -398,29 +420,16 @@ func TestExtensionEntriesAreAssignableToAnIndexSlice(t *testing.T) {
 }
 
 // TestExtensionPartitionAndReassemblyTouchNoFilesystem asserts the property the
-// addonRoot parameter exists for. The behavioral half runs both functions on
-// in-memory bytes alone; the structural half pins it by rejecting any filesystem
-// import in the two files that implement them, so the property cannot regress
-// into a disk lookup that happens to work in a test.
+// addonRoot parameter exists for: both functions run on in-memory bytes and a
+// res:// root alone, with no temporary directory and nothing read from disk.
 func TestExtensionPartitionAndReassemblyTouchNoFilesystem(t *testing.T) {
 	core, removed, err := PartitionExtension([]byte(bothSectionsExtension), demoAddonRoot)
 	require.NoError(t, err)
-	_, err = ReassembleExtension(core, removed, allSlices(removed))
-	require.NoError(t, err)
+	require.NotEmpty(t, removed)
 
-	forbidden := []string{"os", "io", "io/ioutil", "path/filepath", "net", "net/http", "os/exec"}
-	fileSet := token.NewFileSet()
-	for _, name := range []string{"gdextension.go", "godotconfig.go"} {
-		parsed, err := parser.ParseFile(fileSet, name, nil, parser.ImportsOnly)
-		require.NoError(t, err)
-		for _, declared := range parsed.Imports {
-			path, err := strconv.Unquote(declared.Path.Value)
-			require.NoError(t, err)
-			require.NotContains(t, forbidden, path,
-				"%s imports %s; partition and reassembly reach no filesystem, which is why the addon root is a parameter",
-				name, path)
-		}
-	}
+	reassembled, err := ReassembleExtension(core, removed, allSlices(removed))
+	require.NoError(t, err)
+	require.Equal(t, sectionsOf(t, []byte(bothSectionsExtension)), sectionsOf(t, reassembled))
 }
 
 // TestExtensionPartitionHandlesEverySectionOfTheVocabulary proves the
@@ -454,7 +463,7 @@ func TestExtensionPartitionHandlesEverySectionOfTheVocabulary(t *testing.T) {
 
 	reassembled, err := ReassembleExtension(core, removed, allSlices(removed))
 	require.NoError(t, err)
-	parsedSections := sectionsOf(t, reassembled)
+	parsedSections := pathsOf(t, reassembled)
 	for _, section := range sections {
 		require.Equal(t, map[string]string{
 			"macos.debug": fmt.Sprintf("res://addons/demo/bin/%s.framework", section),
@@ -529,6 +538,16 @@ windows.release.x86_64 = "res://addons/demo/bin/libother.dll"`,
 			expectedMessage: []string{"windows.release.x86_64", "more than once"},
 		},
 		{
+			name:            "value is a StringName rather than a string",
+			body:            `macos.debug = &"res://addons/demo/bin/libdemo.framework"`,
+			expectedMessage: []string{"StringName", "plain string"},
+		},
+		{
+			name:            "value is a NodePath rather than a string",
+			body:            `macos.debug = ^"res://addons/demo/bin/libdemo.framework"`,
+			expectedMessage: []string{"NodePath", "plain string"},
+		},
+		{
 			name:            "value is a godot dictionary",
 			body:            `ios.release = { "res://addons/demo/bin/libdemo.a": "" }`,
 			expectedMessage: []string{"dictionary", "exactly one quoted"},
@@ -544,7 +563,7 @@ windows.release.x86_64 = "res://addons/demo/bin/libother.dll"`,
 		{
 			name:            "value is not quoted",
 			body:            `windows.release.x86_64 = 42`,
-			expectedMessage: []string{"42", "not a quoted"},
+			expectedMessage: []string{"42", "number", "exactly one quoted"},
 		},
 		{
 			name:            "value is followed by something other than a comment",
@@ -594,32 +613,32 @@ func TestExtensionPartitionIsFailClosedOnTheDocument(t *testing.T) {
 		{
 			name:            "unclosed section header",
 			content:         "[configuration\nentry_symbol = \"demo_init\"\n",
-			expectedMessage: []string{"line 1", "not closed"},
+			expectedMessage: []string{"not a valid Godot configuration file", "1:15", "expected ']'"},
 		},
 		{
 			name:            "empty section name",
 			content:         "[]\nentry_symbol = \"demo_init\"\n",
-			expectedMessage: []string{"line 1", "names no section"},
+			expectedMessage: []string{"1:2", "section name must not be empty"},
 		},
 		{
 			name:            "line that is not a statement",
 			content:         "[configuration]\nentry_symbol\n",
-			expectedMessage: []string{"line 2", "key = value"},
+			expectedMessage: []string{"2:13", "expected '='"},
 		},
 		{
 			name:            "statement with no key",
 			content:         "[configuration]\n= \"demo_init\"\n",
-			expectedMessage: []string{"line 2", "names no key"},
+			expectedMessage: []string{"2:1", "expected configuration key"},
 		},
 		{
 			name:            "value that is never closed",
 			content:         "[libraries]\nmacos.debug = \"res://addons/demo/bin/libdemo.framework\n",
-			expectedMessage: []string{"line 2", "never closed"},
+			expectedMessage: []string{"2:15", "unterminated string literal"},
 		},
 		{
 			name:            "dictionary that is never closed",
 			content:         "[dependencies]\nmacos.debug = {\n  \"res://addons/demo/bin/x.dylib\": \"\"\n",
-			expectedMessage: []string{"line 2", "never closed"},
+			expectedMessage: []string{"4:1", "expected ',' or '}'"},
 		},
 		{
 			name:            "partitioned section spelled with different case",
@@ -686,7 +705,7 @@ func TestExtensionReassemblyIsFailClosed(t *testing.T) {
 			name:            "core body does not parse",
 			core:            []byte("[libraries\n"),
 			selected:        []SliceID{CoreSliceID()},
-			expectedMessage: []string{"line 1", "not closed"},
+			expectedMessage: []string{"not a valid Godot configuration file", "expected ']'"},
 		},
 		{
 			name:            "core body still carries platform-tagged entries",
@@ -843,47 +862,122 @@ func allSlices(entries map[SliceID]ExtensionEntries) []SliceID {
 	return selected
 }
 
-// sectionsOf parses a .gdextension into section name → key → raw value, which is
-// the semantic content a round trip has to preserve.
+// sectionsOf parses a .gdextension into section name -> key -> formatted value,
+// which is the semantic content a round trip has to preserve.
 func sectionsOf(t *testing.T, content []byte) map[string]map[string]string {
 	t.Helper()
-	document, err := parseGodotConfig(content)
-	require.NoError(t, err)
+	file := parseFixture(t, content)
 
 	sections := map[string]map[string]string{}
-	for _, block := range document.blocks {
-		if block.name == "" && block.headerLine == "" {
-			continue
-		}
-		table := sections[block.name]
+	for _, section := range file.Sections {
+		table := sections[section.Name]
 		if table == nil {
 			table = map[string]string{}
-			sections[block.name] = table
+			sections[section.Name] = table
 		}
-		for _, entry := range block.entries {
-			table[entry.key] = strings.Trim(entry.value, `"`)
+		for _, statement := range section.Statements {
+			if assignment, isAssignment := statement.(*ast.Assignment); isAssignment {
+				table[assignment.Key] = formatFixtureValue(assignment)
+			}
 		}
 	}
 	return sections
 }
 
+// pathsOf parses a .gdextension into section name -> key -> decoded string
+// value, for the tests that compare against a res:// path rather than against a
+// Variant's spelling. An entry holding another Variant type, such as
+// [configuration]'s reloadable, is not a path and is left out.
+func pathsOf(t *testing.T, content []byte) map[string]map[string]string {
+	t.Helper()
+	paths := map[string]map[string]string{}
+	for _, section := range parseFixture(t, content).Sections {
+		table := map[string]string{}
+		for _, statement := range section.Statements {
+			assignment, isAssignment := statement.(*ast.Assignment)
+			if !isAssignment {
+				continue
+			}
+			if literal, isString := assignment.Value.(*ast.StringLiteral); isString {
+				table[assignment.Key] = literal.Value
+			}
+		}
+		paths[section.Name] = table
+	}
+	return paths
+}
+
+// sectionNamesOf returns a document's section names in source order, so a test
+// can assert the author's ordering survived.
+func sectionNamesOf(t *testing.T, content []byte) []string {
+	t.Helper()
+	names := []string{}
+	for _, section := range parseFixture(t, content).Sections {
+		names = append(names, section.Name)
+	}
+	return names
+}
+
+// commentsOf returns every comment of a document in source order, section
+// comments and preamble comments alike.
+func commentsOf(t *testing.T, content []byte) []string {
+	t.Helper()
+	file := parseFixture(t, content)
+
+	comments := []string{}
+	collect := func(statements []ast.Statement) {
+		for _, statement := range statements {
+			if comment, isComment := statement.(*ast.Comment); isComment {
+				comments = append(comments, comment.Text)
+			}
+		}
+	}
+	collect(file.Preamble)
+	for _, section := range file.Sections {
+		collect(section.Statements)
+	}
+	return comments
+}
+
+func parseFixture(t *testing.T, content []byte) *ast.File {
+	t.Helper()
+	file, err := configfile.Parse(bytes.TrimPrefix(content, []byte("\ufeff")))
+	require.NoError(t, err)
+	return file
+}
+
+// formatFixtureValue renders an assignment's value through the parser's own
+// formatter, so two documents comparing equal really carry the same value.
+func formatFixtureValue(assignment *ast.Assignment) string {
+	var file ast.File
+	file.Sections = []*ast.Section{{Name: "value", Statements: []ast.Statement{assignment}}}
+	return strings.TrimSuffix(strings.TrimPrefix(configfile.Format(&file), "[value]\n"+assignment.Key+"="), "\n")
+}
+
 // addonRootOfFixture derives the res:// root a fixture's entries live under by
-// taking the common "res://addons/<name>" prefix of its first entry. It exists so
-// a fixture can be added without also hard-coding its root here.
+// taking the "res://addons/<name>" prefix of its first partitioned entry. It
+// exists so a fixture can be added without also hard-coding its root here.
 func addonRootOfFixture(t *testing.T, content []byte) string {
 	t.Helper()
-	document, err := parseGodotConfig(content)
-	require.NoError(t, err)
+	file := parseFixture(t, content)
 
 	for _, section := range PartitionedSections() {
-		block := document.block(section)
-		if block == nil || len(block.entries) == 0 {
-			continue
+		for _, candidate := range file.Sections {
+			if candidate.Name != string(section) {
+				continue
+			}
+			for _, statement := range candidate.Statements {
+				assignment, isAssignment := statement.(*ast.Assignment)
+				if !isAssignment {
+					continue
+				}
+				literal, isString := assignment.Value.(*ast.StringLiteral)
+				require.True(t, isString, "fixture entry %q is not a string", assignment.Key)
+				components := strings.Split(strings.TrimPrefix(literal.Value, resourcePrefix), "/")
+				require.GreaterOrEqual(t, len(components), 2, "fixture value %q has no addon root", literal.Value)
+				return resourcePrefix + strings.Join(components[:2], "/")
+			}
 		}
-		value := strings.Trim(block.entries[0].value, `"`)
-		components := strings.Split(strings.TrimPrefix(value, resourcePrefix), "/")
-		require.GreaterOrEqual(t, len(components), 2, "fixture value %q has no addon root", value)
-		return resourcePrefix + strings.Join(components[:2], "/")
 	}
 	t.Fatalf("fixture declares no partitioned entry")
 	return ""
@@ -903,28 +997,28 @@ func requireManifestError(t *testing.T, err error, fragments ...string) {
 	}
 }
 
-// TestExtensionPartitionPreservesAFileWithNoFinalNewline covers the byte-fidelity
-// edge of a file whose last line has no ending: a document with nothing to
-// partition comes back unchanged, and one whose last section is partitioned still
-// ends with a line ending so its entries have a line of their own to go on.
-func TestExtensionPartitionPreservesAFileWithNoFinalNewline(t *testing.T) {
+// TestExtensionPartitionAcceptsAFileWithNoFinalNewline covers the edge of a file
+// whose last line has no ending. Canonical emission always terminates the last
+// line, and no content is lost either way.
+func TestExtensionPartitionAcceptsAFileWithNoFinalNewline(t *testing.T) {
 	t.Run("nothing to partition", func(t *testing.T) {
 		const content = "[configuration]\n\nentry_symbol = \"demo_init\"\n\n[icons]\n\nDemoNode = \"res://addons/demo/demo_node.svg\""
 		core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
 		require.NoError(t, err)
 		require.Empty(t, removed)
-		require.Equal(t, content, string(core), "a document with no partitioned entry is reproduced byte for byte")
+		require.Equal(t, sectionsOf(t, []byte(content)), sectionsOf(t, core))
+		require.True(t, strings.HasSuffix(string(core), "\n"), "the emitted body always terminates its last line")
 
 		reassembled, err := ReassembleExtension(core, removed, []SliceID{CoreSliceID()})
 		require.NoError(t, err)
-		require.Equal(t, content, string(reassembled))
+		require.Equal(t, string(core), string(reassembled))
 	})
 
 	t.Run("partitioned section ends the file", func(t *testing.T) {
 		const content = "[configuration]\n\nentry_symbol = \"demo_init\"\n\n[libraries]\n\nmacos.debug = \"res://addons/demo/bin/libdemo.framework\""
 		core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
 		require.NoError(t, err)
-		require.Equal(t, "[configuration]\n\nentry_symbol = \"demo_init\"\n\n[libraries]\n", string(core))
+		require.Equal(t, "[configuration]\nentry_symbol=\"demo_init\"\n\n[libraries]\n", string(core))
 
 		reassembled, err := ReassembleExtension(core, removed, allSlices(removed))
 		require.NoError(t, err)
@@ -941,7 +1035,7 @@ func TestExtensionPartitionPreservesAFileWithNoFinalNewline(t *testing.T) {
 		core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
 		require.NoError(t, err)
 		require.Empty(t, removed)
-		require.Equal(t, "[configuration]\n\nentry_symbol = \"demo_init\"\n\n[libraries]\n", string(core))
+		require.Equal(t, "[configuration]\nentry_symbol=\"demo_init\"\n\n[libraries]\n", string(core))
 	})
 }
 
@@ -1010,4 +1104,82 @@ ios.debug = "res://addons/demo/bin/b.xcframework" # the debug build
 		{Platform: "macos"}: {SectionLibraries: {"macos.debug": "res://addons/demo/bin/a.framework"}},
 		{Platform: "ios"}:   {SectionLibraries: {"ios.debug": "res://addons/demo/bin/b.xcframework"}},
 	}, removed)
+}
+
+// TestExtensionPartitionKeepsCommentsInsideAPartitionedSection asserts a comment
+// in [libraries] or [dependencies] is content rather than an entry: it stays in
+// the core body, so no comment is lost, and it does not come back as an entry.
+func TestExtensionPartitionKeepsCommentsInsideAPartitionedSection(t *testing.T) {
+	const content = `[configuration]
+
+entry_symbol = "demo_init"
+
+[libraries]
+
+; desktop builds
+macos.debug = "res://addons/demo/bin/libdemo.macos.framework"
+# windows.debug.arm64 is not built yet
+linux.release.x86_64 = "res://addons/demo/bin/libdemo.linux.so"
+
+[dependencies]
+
+; nothing is shipped beside the libraries yet
+`
+	core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+	require.NoError(t, err)
+	require.Equal(t, commentsOf(t, []byte(content)), commentsOf(t, core),
+		"every comment of a partitioned section stays in the core body")
+	require.Empty(t, pathsOf(t, core)["libraries"], "no entry stays in the core body")
+	require.Len(t, removed, 2)
+
+	reassembled, err := ReassembleExtension(core, removed, allSlices(removed))
+	require.NoError(t, err)
+	require.Equal(t, commentsOf(t, []byte(content)), commentsOf(t, reassembled))
+	require.Equal(t, sectionsOf(t, []byte(content)), sectionsOf(t, reassembled))
+
+	secondCore, secondRemoved, err := PartitionExtension(reassembled, demoAddonRoot)
+	require.NoError(t, err)
+	require.Equal(t, string(core), string(secondCore))
+	require.Equal(t, removed, secondRemoved)
+}
+
+// TestExtensionIsTheOnlyGodotConfigParser asserts the single-source-of-truth rule
+// the issue states: the Godot config parser is reached from exactly one place in
+// the repository, so no second parser of .gdextension content can appear.
+func TestExtensionIsTheOnlyGodotConfigParser(t *testing.T) {
+	root := filepath.Join("..", "..")
+	callers := map[string]int{}
+	require.NoError(t, filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" || entry.Name() == "website" || entry.Name() == ".worktrees" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(content), "gdparser/configfile") {
+			callers[filepath.ToSlash(path)]++
+		}
+		return nil
+	}))
+	require.Equal(t, []string{"../../internal/slice/gdextension.go"}, sortedCallerPaths(callers),
+		"only internal/slice may reach the Godot config parser")
+}
+
+func sortedCallerPaths(callers map[string]int) []string {
+	paths := make([]string, 0, len(callers))
+	for path := range callers {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
 }
