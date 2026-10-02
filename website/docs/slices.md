@@ -183,8 +183,11 @@ An addon may declare its own list, which **replaces** the project list for that
 addon rather than merging with it. See
 [Manifest](manifest.md#platform-declarations) for the field reference.
 
-`platforms` absent and `platforms = []` are equivalent: both mean the project
-declares nothing beyond `core` and the host slice.
+For the `[project]` table, an absent `platforms` key and `platforms = []` are
+equivalent: both mean the project declares nothing beyond `core` and the host
+slice. On an addon the two differ, because there is a list to inherit: an absent
+key takes the project's list, while `platforms = []` declares nothing for that
+addon.
 
 ## Selection Modes
 
@@ -618,7 +621,9 @@ set rather than the installed one, that means `addons.lock` is byte-identical:
 - across all three selection modes, so a host-only install produces the same
   lock as `--all-platforms`.
 
-`platforms` absent and `platforms = []` also hash identically.
+An absent list and an empty one are encoded identically in the hash, so an addon
+whose effective platform list is empty produces the same `spec_hash` whether that
+came from an absent `[project] platforms` or from an explicit `platforms = []`.
 
 `addons.lock` is the only verification authority. `.gpm-state.toml` answers only
 "which slice IDs did this machine materialize"; it never answers "are these bytes

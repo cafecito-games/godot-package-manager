@@ -92,9 +92,14 @@ never written into the addon table, so `gpm add`, `gpm remove`, and the AssetLib
 wizard all preserve inheritance instead of freezing the resolved list into a
 per-addon override.
 
-`platforms` absent and `platforms = []` are equivalent. The `core` slice and the
-slice for the machine running `gpm` are always installed and may not be declared
-here.
+The two ways of writing "no platforms" differ by table. In `[project]`, an absent
+`platforms` key and `platforms = []` both mean the project declares nothing. On
+an addon, an absent `platforms` key **inherits** the project list, while
+`platforms = []` is an explicit override that declares nothing for that addon —
+so it receives only the `core` slice and the host's slice.
+
+The `core` slice and the slice for the machine running `gpm` are always installed
+and may not be declared here.
 
 `index` marks an `archive` source as sliced and is the absolute URL of the
 addon's `gpm-index.toml`. It is not valid for any other source type: a
@@ -120,7 +125,7 @@ Unknown keys inside `[project]` are rejected. A stray key elsewhere in
 | `install_as` | all | no | Directory name under `addons/`; defaults to the table key. |
 | `exclude` | all | no | Directories under the selected install root to skip. |
 | `checksum` | `github-release`, `archive` | no | Expected SHA-256 of the downloaded archive or release asset. Not valid for a sliced addon. |
-| `platforms` | all | no | Declared platform tags for this addon. Replaces `[project] platforms`. See [Platform slices](slices.md). |
+| `platforms` | all | no | Declared platform tags for this addon. Replaces `[project] platforms` when present; `[]` declares none. See [Platform slices](slices.md). |
 | `index` | `archive` | no | URL of the addon's `gpm-index.toml`, marking the archive as sliced. |
 
 The `[project]` table carries one key:
