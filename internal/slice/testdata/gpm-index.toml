@@ -16,6 +16,11 @@ size   = 4821001
   "ios.template_debug"   = "res://addons/limboai/bin/liblimboai.ios.template_debug.xcframework"
   "ios.template_release" = "res://addons/limboai/bin/liblimboai.ios.template_release.xcframework"
 
+  # A [dependencies] entry is Godot's Dictionary: each dependency's res:// path
+  # mapped to the export subdirectory Godot copies it into. The paths and the
+  # empty debug destination are limboai.gdextension's own [dependencies] values,
+  # one directory up; the release destination is written as a subdirectory so the
+  # non-empty case is covered by the schema's conformance fixture too.
   [slices."ios.arm64".dependencies."limboai.gdextension"]
-  "ios.template_debug"   = "res://addons/limboai/bin/libgodot_jolt.ios.framework"
-  "ios.template_release" = "res://addons/limboai/bin/libgodot_jolt.ios.framework"
+  "ios.template_debug"   = { "res://addons/limboai/bin/libgodot-cpp.ios.template_debug.a" = "" }
+  "ios.template_release" = { "res://addons/limboai/bin/libgodot-cpp.ios.template_release.a" = "Frameworks" }

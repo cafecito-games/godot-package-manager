@@ -31,17 +31,28 @@ sha256 = "` + platformSliceDigest + `"
 size = 4821001
 `
 
+// renderSectionEntry renders one partitioned entry in the section's own schema:
+// a [libraries] entry is a res:// string, while a [dependencies] entry is a
+// table of dependency paths to export destinations, so a contract row that
+// applies to every section has to be spelled per section rather than once.
+func renderSectionEntry(sliceKey string, section ExtensionSection, pathKey, entryKey, resourcePath string) string {
+	header := "\n[slices.\"" + sliceKey + "\"." + string(section) + ".\"" + pathKey + "\"]\n"
+	if section == SectionDependencies {
+		return header + "\"" + entryKey + "\" = { \"" + resourcePath + "\" = \"\" }\n"
+	}
+	return header + "\"" + entryKey + "\" = \"" + resourcePath + "\"\n"
+}
+
 // platformSliceWithSection renders the ios.arm64 slice carrying one entry in the
-// named section, so a contract row can be asserted identically for every
-// partitioned section.
+// named section.
 func platformSliceWithSection(section ExtensionSection, pathKey, entryKey, entryValue string) string {
-	return validIndexTOML + "\n[slices.\"ios.arm64\"." + string(section) + ".\"" + pathKey + "\"]\n" +
-		"\"" + entryKey + "\" = \"" + entryValue + "\"\n"
+	return validIndexTOML + renderSectionEntry("ios.arm64", section, pathKey, entryKey, entryValue)
 }
 
 func coreSliceWithSection(section ExtensionSection) string {
-	return validIndexTOML + "\n[slices.core." + string(section) + ".\"limboai.gdextension\"]\n" +
-		"\"ios.template_release\" = \"res://addons/limboai/bin/libai.a\"\n"
+	return validIndexTOML + renderSectionEntry(
+		CorePlatform, section, "limboai.gdextension", "ios.template_release", "res://addons/limboai/bin/libai.a",
+	)
 }
 
 func requireFetchError(t *testing.T, err error) {
@@ -68,7 +79,22 @@ func TestIndexLoadAcceptsCheckedInFixture(t *testing.T) {
 	require.Equal(t, "limboai-1.4.0-ios.arm64.zip", platformSlice.File)
 	require.Equal(t, int64(4821001), platformSlice.Size)
 	require.Len(t, platformSlice.Libraries["limboai.gdextension"], 2)
+	require.Equal(t,
+		"res://addons/limboai/bin/liblimboai.ios.template_debug.xcframework",
+		platformSlice.Libraries["limboai.gdextension"]["ios.template_debug"],
+	)
 	require.Len(t, platformSlice.Dependencies["limboai.gdextension"], 2)
+	// The destination the nested shape exists to carry: limboai copies its
+	// release dependency into the export's Frameworks subdirectory and its debug
+	// dependency beside the exported binary.
+	require.Equal(t,
+		ExtensionDependencyTargets{"res://addons/limboai/bin/libgodot-cpp.ios.template_debug.a": ""},
+		platformSlice.Dependencies["limboai.gdextension"]["ios.template_debug"],
+	)
+	require.Equal(t,
+		ExtensionDependencyTargets{"res://addons/limboai/bin/libgodot-cpp.ios.template_release.a": "Frameworks"},
+		platformSlice.Dependencies["limboai.gdextension"]["ios.template_release"],
+	)
 }
 
 func TestIndexLoadKeepsBothSectionsDistinctForOneSharedKey(t *testing.T) {
@@ -77,7 +103,7 @@ func TestIndexLoadKeepsBothSectionsDistinctForOneSharedKey(t *testing.T) {
 "ios.template_release.arm64" = "res://addons/limboai/bin/libai.ios.arm64.a"
 
 [slices."ios.arm64".dependencies."limboai.gdextension"]
-"ios.template_release.arm64" = "res://addons/limboai/bin/dep.framework"
+"ios.template_release.arm64" = { "res://addons/limboai/bin/dep.framework" = "Frameworks" }
 `
 	index, err := LoadIndex([]byte(document))
 	require.NoError(t, err)
@@ -88,7 +114,7 @@ func TestIndexLoadKeepsBothSectionsDistinctForOneSharedKey(t *testing.T) {
 		platformSlice.Libraries["limboai.gdextension"]["ios.template_release.arm64"],
 	)
 	require.Equal(t,
-		"res://addons/limboai/bin/dep.framework",
+		ExtensionDependencyTargets{"res://addons/limboai/bin/dep.framework": "Frameworks"},
 		platformSlice.Dependencies["limboai.gdextension"]["ios.template_release.arm64"],
 	)
 }
@@ -386,6 +412,24 @@ func TestIndexRejectsMalformedPartitionedSections(t *testing.T) {
 					document: validIndexTOML + "\n[slices.\"ios.arm64\"." + string(section) + ".\"limboai.gdextension\"]\n",
 					contains: []string{"limboai.gdextension"},
 				},
+				{
+					// One level past the section's own maximum depth: a
+					// [libraries] entry bottoms out at its res:// value, while a
+					// [dependencies] entry holds one more table of dependency
+					// paths. Either way the key is rejected and the message names
+					// the offending key path. Strict decoding reports it first,
+					// as a leaf that is a table where the schema declares a
+					// string; indexKeyDepths is the backstop that keeps an
+					// over-deep key from being read as a known one, and is the
+					// single declaration of both maxima.
+					name: "a key one level deeper than the section allows",
+					document: platformSliceWithSection(
+						section, "limboai.gdextension", "ios.template_release", "res://addons/limboai/bin/libai.a",
+					) + "\n[slices.\"ios.arm64\"." + string(section) +
+						".\"limboai.gdextension\".\"ios.template_debug\"." + deeperKeyPath(section) + "]\n" +
+						"\"extra\" = \"res://addons/limboai/bin/libai.a\"\n",
+					contains: []string{string(section), "limboai.gdextension", "ios.template_debug"},
+				},
 			} {
 				t.Run(testCase.name, func(t *testing.T) {
 					index, err := LoadIndex([]byte(testCase.document))
@@ -413,21 +457,45 @@ func TestPartitionedSectionsIsClosed(t *testing.T) {
 	require.Len(t, PartitionedSections(), 2)
 }
 
-func TestIndexSliceSectionResolvesEverySection(t *testing.T) {
+// TestIndexSliceExtensionPathsResolvesEverySection replaces the test that
+// covered (*IndexSlice).Section. That accessor is gone: a Go method cannot be
+// generic, so a single accessor would have to widen one section's value back to
+// the lossy leaf type this schema exists to remove. Its structural job — which
+// .gdextension files does this slice ship, for a caller walking
+// PartitionedSections — is what ExtensionPaths serves, and its leaf job is
+// served by the two statically typed fields.
+func TestIndexSliceExtensionPathsResolvesEverySection(t *testing.T) {
 	indexSlice := &IndexSlice{
-		Libraries:    map[string]map[string]string{"a.gdextension": {"ios": "res://a"}},
-		Dependencies: map[string]map[string]string{"b.gdextension": {"ios": "res://b"}},
+		Libraries: ExtensionSectionTable[string]{
+			"second.gdextension": {"ios": "res://second"},
+			"a.gdextension":      {"ios": "res://a"},
+		},
+		Dependencies: ExtensionSectionTable[ExtensionDependencyTargets]{
+			"b.gdextension": {"ios": {"res://b": ""}},
+		},
 	}
-	expected := map[ExtensionSection]string{
-		SectionLibraries:    "a.gdextension",
-		SectionDependencies: "b.gdextension",
+	expected := map[ExtensionSection][]string{
+		SectionLibraries:    {"a.gdextension", "second.gdextension"},
+		SectionDependencies: {"b.gdextension"},
 	}
 	for _, section := range PartitionedSections() {
-		table := indexSlice.Section(section)
-		require.NotNil(t, table, "section %q must resolve to a table", section)
-		require.Contains(t, table, expected[section])
+		require.Equal(t, expected[section], indexSlice.ExtensionPaths(section),
+			"section %q must resolve to its path keys in ascending order", section)
 	}
-	require.Nil(t, indexSlice.Section(ExtensionSection("frameworks")), "an unknown section resolves to no table")
+	require.Nil(t, indexSlice.ExtensionPaths(ExtensionSection("frameworks")),
+		"an unknown section resolves to no paths")
+	require.Nil(t, (&IndexSlice{}).ExtensionPaths(SectionDependencies),
+		"a section a slice declares nothing for resolves to no paths")
+}
+
+// deeperKeyPath names the extra key component that takes a section's key one
+// level past its schema: a [libraries] entry bottoms out at its value, while a
+// [dependencies] entry holds one more table of dependency paths.
+func deeperKeyPath(section ExtensionSection) string {
+	if section == SectionDependencies {
+		return `"res://addons/limboai/bin/libai.a"`
+	}
+	return `"deeper"`
 }
 
 func TestIndexPublishedSliceIDsFeedsSelectSlices(t *testing.T) {
@@ -585,8 +653,10 @@ func TestIndexSectionKeyOwnership(t *testing.T) {
 			name := testCase.sliceKey + "/" + string(section) + "/" + testCase.entryKey
 			t.Run(name, func(t *testing.T) {
 				document := strings.Replace(validIndexTOML, `[slices."ios.arm64"]`, `[slices."`+testCase.sliceKey+`"]`, 1) +
-					"\n[slices.\"" + testCase.sliceKey + "\"." + string(section) + ".\"limboai.gdextension\"]\n" +
-					"\"" + testCase.entryKey + "\" = \"res://addons/limboai/bin/libai.a\"\n"
+					renderSectionEntry(
+						testCase.sliceKey, section, "limboai.gdextension",
+						testCase.entryKey, "res://addons/limboai/bin/libai.a",
+					)
 				index, err := LoadIndex([]byte(document))
 				if testCase.accepted {
 					require.NoError(t, err)

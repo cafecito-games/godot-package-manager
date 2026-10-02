@@ -63,26 +63,63 @@ type IndexSlice struct {
 
 	// Libraries and Dependencies are the partitioned .gdextension sections, each
 	// mapping a .gdextension path relative to the addon root to that section's
-	// platform-tagged entries. They are siblings of the same shape because a
-	// Godot platform tag legitimately appears in both: one names the library
-	// binary, the other the files shipped beside it.
-	Libraries    map[string]map[string]string `toml:"libraries,omitempty"`
-	Dependencies map[string]map[string]string `toml:"dependencies,omitempty"`
+	// platform-tagged entries. A Godot platform tag legitimately appears in
+	// both — one names the library binary, the other the files shipped beside
+	// it — so they are siblings sharing every structural level. They differ only
+	// in the leaf: a [libraries] entry names one res:// path, while a
+	// [dependencies] entry is Godot's Dictionary of dependency paths to export
+	// destinations.
+	//
+	// Their declaration order is the order of PartitionedSections, which is also
+	// the order they are written and validated in.
+	Libraries    ExtensionSectionTable[string]                     `toml:"libraries,omitempty"`
+	Dependencies ExtensionSectionTable[ExtensionDependencyTargets] `toml:"dependencies,omitempty"`
 }
 
-// Section resolves a partitioned section name to its table, and is the one
-// mapping from an ExtensionSection to the field holding it. Callers that handle
-// every partitioned section go through this accessor instead of switching on
-// section names themselves. An unknown section resolves to no table.
-func (indexSlice *IndexSlice) Section(section ExtensionSection) map[string]map[string]string {
-	switch section {
-	case SectionLibraries:
-		return indexSlice.Libraries
-	case SectionDependencies:
-		return indexSlice.Dependencies
-	default:
+// ExtensionEntryTable is one .gdextension section's platform-tagged entries for
+// one file: a Godot platform tag mapped to that entry's value.
+type ExtensionEntryTable[Value any] map[string]Value
+
+// ExtensionSectionTable is one slice's table for one partitioned .gdextension
+// section: a .gdextension path relative to the addon root, then that section's
+// platform-tagged entries. It is generic in the value because the two
+// partitioned sections do not share a value type — a [libraries] entry names one
+// res:// path, while a [dependencies] entry is Godot's Dictionary — while every
+// level above the value obeys identical rules.
+type ExtensionSectionTable[Value any] map[string]ExtensionEntryTable[Value]
+
+// ExtensionDependencyTargets is one [dependencies] entry's Godot Dictionary:
+// each dependency's res:// path mapped to the export subdirectory Godot copies
+// it into. An empty destination means the dependency is copied beside the
+// exported binary, which is what every published addon writes today.
+//
+// This is the single declaration of that shape. Neither ExtensionEntries nor
+// IndexSlice spells the underlying map again.
+type ExtensionDependencyTargets map[string]string
+
+// ExtensionPaths returns the .gdextension path keys the named section declares,
+// in ascending order, and nil for a section this schema does not partition. It
+// is the structural accessor for a caller that walks PartitionedSections and
+// needs to know which files a slice ships; the entries themselves are reached
+// through the statically typed fields, because a Go method cannot be generic and
+// a single accessor would have to widen one section's value back to a lossy
+// type.
+func (indexSlice *IndexSlice) ExtensionPaths(section ExtensionSection) []string {
+	// Keyed by section rather than switched on, so a section added to the
+	// vocabulary without a field here resolves to nil in exactly one place.
+	resolvers := map[ExtensionSection]func() []string{
+		SectionLibraries:    func() []string { return sortedKeys(indexSlice.Libraries) },
+		SectionDependencies: func() []string { return sortedKeys(indexSlice.Dependencies) },
+	}
+	resolve, declared := resolvers[section]
+	if !declared {
 		return nil
 	}
+	paths := resolve()
+	if len(paths) == 0 {
+		return nil
+	}
+	return paths
 }
 
 // sha256Pattern matches a bare SHA-256 digest: exactly 64 lowercase hex digits.
@@ -232,13 +269,27 @@ func rejectMisspelledIndexKey(key toml.Key) error {
 	if len(key) >= 3 && !slices.Contains(sliceFieldNames(), key[2]) {
 		return unknownSliceKeyError(strings.Join(key[2:], "."), key[1])
 	}
-	if len(key) >= 4 && !slices.Contains(partitionedSections, ExtensionSection(key[2])) {
-		return unknownSliceKeyError(strings.Join(key[2:], "."), key[1])
-	}
-	if len(key) > 5 {
-		return unknownSliceKeyError(strings.Join(key[2:], "."), key[1])
+	if len(key) >= 4 {
+		// A key below a slice's own fields is inside a partitioned section, and
+		// how deep that section nests is the section's own property: a
+		// [libraries] entry stops at its value, while a [dependencies] entry
+		// holds one more table of dependency paths.
+		maximumDepth, partitioned := indexKeyDepths[ExtensionSection(key[2])]
+		if !partitioned || len(key) > maximumDepth {
+			return unknownSliceKeyError(strings.Join(key[2:], "."), key[1])
+		}
 	}
 	return nil
+}
+
+// indexKeyDepths is the number of index key components the deepest key of each
+// partitioned section has, and the single declaration of that maximum. A
+// [libraries] key bottoms out at slices.<id>.libraries.<path>.<entryKey>, while
+// a [dependencies] entry holds a Dictionary, so its keys reach one level
+// further: slices.<id>.dependencies.<path>.<entryKey>.<dependencyPath>.
+var indexKeyDepths = map[ExtensionSection]int{
+	SectionLibraries:    5,
+	SectionDependencies: 6,
 }
 
 func unknownIndexKeyError(key string) error {
@@ -334,8 +385,26 @@ func validateIndexSlice(key string, id SliceID, indexSlice *IndexSlice) error {
 	if indexSlice.Size <= 0 {
 		return fetchErrorf("index slice %q: size %d must be a positive byte count", key, indexSlice.Size)
 	}
+	// One validator per partitioned section, each binding that section's table
+	// and the leaf rule its values obey; every structural rule above the leaf is
+	// shared and lives in validateSectionTable. They are keyed by section and
+	// run in PartitionedSections order, so a slice with problems in both
+	// sections always reports the [libraries] one, and a section added to the
+	// vocabulary without a validator here is reported rather than left unchecked.
+	validators := map[ExtensionSection]func() error{
+		SectionLibraries: func() error {
+			return validateSectionTable(key, id, SectionLibraries, indexSlice.Libraries, validateResourcePath)
+		},
+		SectionDependencies: func() error {
+			return validateSectionTable(key, id, SectionDependencies, indexSlice.Dependencies, validateDependencyTargets)
+		},
+	}
 	for _, section := range PartitionedSections() {
-		if err := validateSection(key, id, section, indexSlice.Section(section)); err != nil {
+		validate, declared := validators[section]
+		if !declared {
+			return fetchErrorf("index slice %q: partitioned section %s is not validated by this gpm", key, section)
+		}
+		if err := validate(); err != nil {
 			return err
 		}
 	}
@@ -364,10 +433,19 @@ func validateArchiveFileName(file string) error {
 	return nil
 }
 
-// validateSection validates one partitioned section of one slice. Every rule is
-// identical for every section, which is why the section is a parameter rather
-// than a copy of this function per table.
-func validateSection(key string, id SliceID, section ExtensionSection, table map[string]map[string]string) error {
+// validateSectionTable validates one partitioned section of one slice. Every
+// structural rule — a path key names a .gdextension file inside the addon, a
+// table declared but empty is rejected, an entry key reduces to a slice the
+// table belongs to, keys are visited in sorted order — is identical for every
+// section, so it is written once here and the section's own leaf rule arrives as
+// validateValue.
+func validateSectionTable[Value any](
+	key string,
+	id SliceID,
+	section ExtensionSection,
+	table ExtensionSectionTable[Value],
+	validateValue func(Value) error,
+) error {
 	if table == nil {
 		return nil
 	}
@@ -410,7 +488,7 @@ func validateSection(key string, id SliceID, section ExtensionSection, table map
 		}
 		sort.Strings(entryKeys)
 		for _, entryKey := range entryKeys {
-			if err := validateSectionEntry(key, id, section, pathKey, entryKey, entries[entryKey]); err != nil {
+			if err := validateSectionEntry(key, id, section, pathKey, entryKey, entries[entryKey], validateValue); err != nil {
 				return err
 			}
 		}
@@ -418,7 +496,14 @@ func validateSection(key string, id SliceID, section ExtensionSection, table map
 	return nil
 }
 
-func validateSectionEntry(key string, id SliceID, section ExtensionSection, pathKey, entryKey, value string) error {
+func validateSectionEntry[Value any](
+	key string,
+	id SliceID,
+	section ExtensionSection,
+	pathKey, entryKey string,
+	value Value,
+	validateValue func(Value) error,
+) error {
 	owner, err := ReduceLibraryKey(entryKey)
 	if err != nil {
 		// Reported by message for the same reason as an invalid slice key: the
@@ -436,8 +521,65 @@ func validateSectionEntry(key string, id SliceID, section ExtensionSection, path
 			key, section, entryKey, pathKey, owner, id,
 		)
 	}
-	if err := validateResourcePath(value); err != nil {
+	if err := validateValue(value); err != nil {
 		return fetchErrorf("index slice %q: invalid %s entry %q in %q: %s", key, section, entryKey, pathKey, err)
+	}
+	return nil
+}
+
+// validateDependencyTargets is the [dependencies] leaf rule: one Godot
+// Dictionary of dependency res:// paths to export destinations. The paths are
+// visited in sorted order, so an entry with several problems always reports the
+// same one.
+//
+// An empty Dictionary is rejected for the same reason a declared-but-empty
+// section table is: the writer's omitempty does not reach this depth, so
+// accepting one would publish a table header naming no dependency and make
+// load, save, load disagree with the index that was accepted.
+func validateDependencyTargets(targets ExtensionDependencyTargets) error {
+	if len(targets) == 0 {
+		return fmt.Errorf("the dependency table is empty; an entry naming no dependency is a producer mistake and would break byte-stable output")
+	}
+	for _, path := range sortedKeys(targets) {
+		if err := validateResourcePath(path); err != nil {
+			return fmt.Errorf("dependency path %s", err)
+		}
+		if err := validateExportDestination(targets[path]); err != nil {
+			return fmt.Errorf("dependency %q: %s", path, err)
+		}
+	}
+	return nil
+}
+
+// validateExportDestination rejects an export destination that is not a clean
+// relative subdirectory. Godot copies the dependency into this subdirectory of
+// the exported project, so an absolute path, a traversal, or a Windows
+// separator in it writes outside the export directory.
+//
+// It is the single declaration of that rule, applied while partitioning an
+// author's .gdextension, while loading a producer's index, and again while
+// reassembling an installed .gdextension.
+//
+// The empty string is accepted and is the overwhelmingly common real case: it
+// means the dependency is copied beside the exported binary.
+func validateExportDestination(destination string) error {
+	if destination == "" {
+		return nil
+	}
+	if strings.HasPrefix(destination, resourcePrefix) {
+		return fmt.Errorf(
+			"destination %q must be a path relative to the export directory, not a %s path",
+			destination, resourcePrefix,
+		)
+	}
+	if err := validateRelativePath(destination); err != nil {
+		return fmt.Errorf("destination %s", err)
+	}
+	if strings.Contains(destination, `"`) {
+		return fmt.Errorf("destination %q must not contain a quote", destination)
+	}
+	if strings.ContainsFunc(destination, func(character rune) bool { return character < ' ' || character == 0x7f }) {
+		return fmt.Errorf("destination contains a control character")
 	}
 	return nil
 }
@@ -521,9 +663,11 @@ func (index *Index) PublishedSliceIDs() []SliceID {
 // Save writes the index to path as TOML through a temp file and a rename, so a
 // mid-write failure never leaves a truncated index at path.
 //
-// Output is deterministic — slice keys, .gdextension path keys, and entry keys
-// are all written in sorted order — so a producer re-run over unchanged input
-// writes an identical file with an identical checksum.
+// Output is deterministic at every level: the top-level fields and then the
+// partitioned tables in struct-declaration order, and slice keys,
+// .gdextension path keys, entry keys, and a [dependencies] entry's dependency
+// paths all in ascending order. A producer re-run over unchanged input
+// therefore writes an identical file with an identical checksum.
 func (index *Index) Save(path string) error {
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".gpm-index-*.tmp")
 	if err != nil {

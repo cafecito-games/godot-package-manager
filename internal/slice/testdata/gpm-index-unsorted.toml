@@ -16,8 +16,8 @@ size   = 4821001
   "ios.template_debug"   = "res://addons/limboai/bin/liblimboai.ios.template_debug.xcframework"
 
   [slices."ios.arm64".dependencies."nested/second.gdextension"]
-  "ios.template_release.arm64" = "res://addons/limboai/nested/bin/dep.framework"
-  "ios.template_debug.arm64"   = "res://addons/limboai/nested/bin/dep.debug.framework"
+  "ios.template_release.arm64" = { "res://addons/limboai/nested/bin/dep.framework" = "Frameworks", "res://addons/limboai/nested/bin/aux.a" = "" }
+  "ios.template_debug.arm64"   = { "res://addons/limboai/nested/bin/dep.debug.framework" = "" }
 
 [slices.core]
 file   = "limboai-1.4.0-core.zip"
