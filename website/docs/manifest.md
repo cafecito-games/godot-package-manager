@@ -98,8 +98,10 @@ an addon, an absent `platforms` key **inherits** the project list, while
 `platforms = []` is an explicit override that declares nothing for that addon —
 so it receives only the `core` slice and the host's slice.
 
-The `core` slice and the slice for the machine running `gpm` are always installed
-and may not be declared here.
+`core` is the one tag that may not appear in a `platforms` list: every project
+receives it implicitly. The slice for the machine running `gpm` is also installed
+implicitly, but a platform the project exports to still belongs in the list —
+only then does an install on a different host fetch its binaries.
 
 `index` marks an `archive` source as sliced and is the absolute URL of the
 addon's `gpm-index.toml`. It is not valid for any other source type: a
