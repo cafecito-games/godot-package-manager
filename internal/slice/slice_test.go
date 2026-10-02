@@ -3,6 +3,8 @@ package slice
 import (
 	"errors"
 	"os"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -240,4 +242,361 @@ func TestReduceLibraryKeyIsFailClosed(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestHostCandidatesMatchesTheDesignTable asserts the host candidate chains of
+// docs/superpowers/specs/2026-10-02-addon-platform-slices-design.md.
+func TestHostCandidatesMatchesTheDesignTable(t *testing.T) {
+	rows := []struct {
+		operatingSystem string
+		architecture    string
+		expected        []string
+	}{
+		{"darwin", "arm64", []string{"macos.arm64", "macos.universal", "macos"}},
+		{"darwin", "amd64", []string{"macos.x86_64", "macos.universal", "macos"}},
+		{"linux", "amd64", []string{"linux.x86_64", "linux"}},
+		{"linux", "arm64", []string{"linux.arm64", "linux"}},
+		{"windows", "amd64", []string{"windows.x86_64", "windows"}},
+		{"windows", "arm64", []string{"windows.arm64", "windows"}},
+	}
+
+	for _, row := range rows {
+		host := Host{OperatingSystem: row.operatingSystem, Architecture: row.architecture}
+		candidates := HostCandidates(host)
+		require.Equal(t, row.expected, sliceIDStrings(candidates), "host %s/%s", row.operatingSystem, row.architecture)
+		for _, candidate := range candidates {
+			roundTripped, err := ParseSliceID(candidate.String())
+			require.NoError(t, err, "every candidate must be a valid slice ID")
+			require.Equal(t, candidate, roundTripped)
+		}
+	}
+}
+
+func TestHostCandidatesIsEmptyForAHostWithNoChain(t *testing.T) {
+	for _, host := range []Host{
+		{OperatingSystem: "plan9", Architecture: "amd64"},
+		{OperatingSystem: "linux", Architecture: "mips64"},
+		{OperatingSystem: "", Architecture: ""},
+	} {
+		require.Empty(t, HostCandidates(host), "host %+v", host)
+	}
+}
+
+func TestHostCandidatesIsDeterministicAndDoesNotShareState(t *testing.T) {
+	host := Host{OperatingSystem: "darwin", Architecture: "arm64"}
+	first := HostCandidates(host)
+	first[0] = SliceID{Platform: "web"}
+	second := HostCandidates(host)
+	require.Equal(t, []string{"macos.arm64", "macos.universal", "macos"}, sliceIDStrings(second))
+}
+
+func TestCurrentHostReadsTheInjectedRuntimeValues(t *testing.T) {
+	require.Equal(t, runtime.GOOS, CurrentHost().OperatingSystem)
+	require.Equal(t, runtime.GOARCH, CurrentHost().Architecture)
+
+	originalOperatingSystem, originalArchitecture := currentOperatingSystem, currentArchitecture
+	t.Cleanup(func() {
+		currentOperatingSystem, currentArchitecture = originalOperatingSystem, originalArchitecture
+	})
+	currentOperatingSystem, currentArchitecture = "windows", "arm64"
+	require.Equal(t, Host{OperatingSystem: "windows", Architecture: "arm64"}, CurrentHost())
+	require.Equal(t, []string{"windows.arm64", "windows"}, sliceIDStrings(HostCandidates(CurrentHost())))
+}
+
+func sliceIDStrings(ids []SliceID) []string {
+	if ids == nil {
+		return nil
+	}
+	strung := make([]string, 0, len(ids))
+	for _, id := range ids {
+		strung = append(strung, id.String())
+	}
+	return strung
+}
+
+func publishedSlices(t *testing.T, ids ...string) []SliceID {
+	t.Helper()
+	published := make([]SliceID, 0, len(ids))
+	for _, id := range ids {
+		parsed, err := ParseSliceID(id)
+		require.NoError(t, err)
+		published = append(published, parsed)
+	}
+	return published
+}
+
+func TestSelectSlicesReturnsCorePlusDeclaredPlusTheFirstPublishedHostCandidate(t *testing.T) {
+	published := publishedSlices(t, "core", "ios.arm64", "android.arm64", "macos", "windows.x86_64")
+	host := Host{OperatingSystem: "darwin", Architecture: "arm64"}
+
+	selection, err := SelectSlices([]string{"ios.arm64", "android.arm64"}, host, published, false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"core", "android.arm64", "ios.arm64", "macos"}, sliceIDStrings(selection.Slices))
+	require.True(t, selection.HostSupported)
+	require.Equal(t, "macos", selection.HostSlice.String())
+}
+
+func TestSelectSlicesPrefersTheMostSpecificPublishedHostCandidate(t *testing.T) {
+	host := Host{OperatingSystem: "darwin", Architecture: "arm64"}
+
+	selection, err := SelectSlices(nil, host, publishedSlices(t, "core", "macos", "macos.universal", "macos.arm64"), false)
+	require.NoError(t, err)
+	require.Equal(t, "macos.arm64", selection.HostSlice.String())
+	require.Equal(t, []string{"core", "macos.arm64"}, sliceIDStrings(selection.Slices))
+
+	selection, err = SelectSlices(nil, host, publishedSlices(t, "core", "macos", "macos.universal"), false)
+	require.NoError(t, err)
+	require.Equal(t, "macos.universal", selection.HostSlice.String())
+}
+
+func TestSelectSlicesDeduplicatesDeclaredEntries(t *testing.T) {
+	published := publishedSlices(t, "core", "ios.arm64", "linux.x86_64")
+	host := Host{OperatingSystem: "linux", Architecture: "amd64"}
+
+	selection, err := SelectSlices([]string{"ios.arm64", "ios.arm64", "linux.x86_64"}, host, published, false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"core", "ios.arm64", "linux.x86_64"}, sliceIDStrings(selection.Slices))
+}
+
+func TestSelectSlicesWithAllPlatformsReturnsEveryPublishedSlice(t *testing.T) {
+	published := publishedSlices(t, "windows.x86_64", "core", "ios.arm64", "macos", "android.arm64")
+	host := Host{OperatingSystem: "darwin", Architecture: "arm64"}
+
+	selection, err := SelectSlices([]string{"ios.arm64"}, host, published, true)
+	require.NoError(t, err)
+	require.Equal(t, []string{"core", "android.arm64", "ios.arm64", "macos", "windows.x86_64"}, sliceIDStrings(selection.Slices))
+	require.True(t, selection.HostSupported)
+}
+
+func TestSelectSlicesReportsAnUnsupportedHostWithoutFailing(t *testing.T) {
+	published := publishedSlices(t, "core", "ios.arm64", "android.arm64")
+
+	for _, host := range []Host{
+		{OperatingSystem: "darwin", Architecture: "arm64"},
+		{OperatingSystem: "plan9", Architecture: "amd64"},
+	} {
+		selection, err := SelectSlices([]string{"ios.arm64"}, host, published, false)
+		require.NoError(t, err, "an unsupported host is a diagnostic, not an error")
+		require.False(t, selection.HostSupported, "host %+v", host)
+		require.Equal(t, SliceID{}, selection.HostSlice)
+		require.Equal(t, []string{"core", "ios.arm64"}, sliceIDStrings(selection.Slices))
+	}
+}
+
+func TestSelectSlicesIsDeterministicAndDoesNotMutateItsArguments(t *testing.T) {
+	declared := []string{"windows.x86_64", "ios.arm64", "android.arm64"}
+	published := publishedSlices(t, "windows.x86_64", "core", "ios.arm64", "android.arm64", "macos")
+	host := Host{OperatingSystem: "darwin", Architecture: "arm64"}
+
+	first, err := SelectSlices(declared, host, published, false)
+	require.NoError(t, err)
+	second, err := SelectSlices(declared, host, published, false)
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+	require.Equal(t, []string{"core", "android.arm64", "ios.arm64", "macos", "windows.x86_64"}, sliceIDStrings(first.Slices))
+
+	require.Equal(t, []string{"windows.x86_64", "ios.arm64", "android.arm64"}, declared, "declared must not be reordered")
+	require.Equal(t, []string{"windows.x86_64", "core", "ios.arm64", "android.arm64", "macos"}, sliceIDStrings(published), "published must not be reordered")
+
+	first.Slices[0] = SliceID{Platform: "web"}
+	third, err := SelectSlices(declared, host, published, false)
+	require.NoError(t, err)
+	require.Equal(t, second, third, "results must not share state")
+}
+
+func TestSelectSlicesIsFailClosed(t *testing.T) {
+	host := Host{OperatingSystem: "linux", Architecture: "amd64"}
+	rows := []struct {
+		name             string
+		declared         []string
+		published        []string
+		allPlatforms     bool
+		expectedExitCode output.ExitCode
+		expectedMessage  []string
+	}{
+		{
+			name:             "declared platform absent from the published set",
+			declared:         []string{"ios.arm64"},
+			published:        []string{"core", "linux.x86_64", "macos"},
+			expectedExitCode: output.ExitFetch,
+			expectedMessage:  []string{"ios.arm64", "core", "linux.x86_64", "macos"},
+		},
+		{
+			name:             "declared platform absent with all platforms requested",
+			declared:         []string{"ios.arm64"},
+			published:        []string{"core", "linux.x86_64"},
+			allPlatforms:     true,
+			expectedExitCode: output.ExitFetch,
+			expectedMessage:  []string{"ios.arm64"},
+		},
+		{
+			name:             "published set missing core",
+			declared:         []string{"linux.x86_64"},
+			published:        []string{"linux.x86_64", "macos"},
+			expectedExitCode: output.ExitFetch,
+			expectedMessage:  []string{"core"},
+		},
+		{
+			name:             "published set empty",
+			declared:         nil,
+			published:        nil,
+			expectedExitCode: output.ExitFetch,
+			expectedMessage:  []string{"core"},
+		},
+		{
+			name:             "published set missing core with all platforms requested",
+			declared:         nil,
+			published:        []string{"linux.x86_64"},
+			allPlatforms:     true,
+			expectedExitCode: output.ExitFetch,
+			expectedMessage:  []string{"core"},
+		},
+		{
+			name:             "declared entry is an unknown platform",
+			declared:         []string{"solaris.x86_64"},
+			published:        []string{"core", "linux.x86_64"},
+			expectedExitCode: output.ExitManifest,
+			expectedMessage:  []string{"solaris"},
+		},
+		{
+			name:             "declared entry is malformed",
+			declared:         []string{"ios.arm64.extra"},
+			published:        []string{"core", "linux.x86_64"},
+			expectedExitCode: output.ExitManifest,
+			expectedMessage:  []string{"ios.arm64.extra"},
+		},
+		{
+			name:             "declared entry is empty",
+			declared:         []string{""},
+			published:        []string{"core", "linux.x86_64"},
+			expectedExitCode: output.ExitManifest,
+			expectedMessage:  nil,
+		},
+		{
+			name:             "declared entry is core",
+			declared:         []string{"core"},
+			published:        []string{"core", "linux.x86_64"},
+			expectedExitCode: output.ExitManifest,
+			expectedMessage:  []string{"implicit"},
+		},
+		{
+			name:             "declared entry is a build target tag",
+			declared:         []string{"macos.debug"},
+			published:        []string{"core", "macos"},
+			expectedExitCode: output.ExitManifest,
+			expectedMessage:  []string{"macos.debug"},
+		},
+	}
+
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			selection, err := SelectSlices(row.declared, host, publishedSlices(t, row.published...), row.allPlatforms)
+			require.Error(t, err)
+			require.Equal(t, Selection{}, selection, "a failed selection returns no partial result")
+			require.Equal(t, row.expectedExitCode, output.CodeFor(err))
+			switch row.expectedExitCode {
+			case output.ExitManifest:
+				var manifestError *output.ManifestError
+				require.True(t, errors.As(err, &manifestError))
+			case output.ExitFetch:
+				var fetchError *output.FetchError
+				require.True(t, errors.As(err, &fetchError))
+			}
+			for _, fragment := range row.expectedMessage {
+				require.Contains(t, err.Error(), fragment)
+			}
+		})
+	}
+}
+
+// TestVocabulariesAreClosed proves the three vocabularies this package owns are
+// closed: every member is handled by every consumer, every non-member is
+// rejected by every consumer, and the sets are pairwise disjoint so that
+// classifying a .gdextension key component is never ambiguous.
+func TestVocabulariesAreClosed(t *testing.T) {
+	consumers := map[string]func(string) (SliceID, error){
+		"ParseDeclaredPlatform": ParseDeclaredPlatform,
+		"ParseSliceID":          ParseSliceID,
+		"ReduceLibraryKey":      ReduceLibraryKey,
+	}
+
+	t.Run("sets are pairwise disjoint and exclude core", func(t *testing.T) {
+		sets := map[string][]string{
+			"platforms":     KnownPlatforms(),
+			"architectures": KnownArchitectures(),
+			"buildTargets":  KnownBuildTargets(),
+		}
+		for name, values := range sets {
+			require.NotEmpty(t, values)
+			require.True(t, slices.IsSorted(values), "%s must be declared sorted", name)
+			require.NotContains(t, values, CorePlatform, "%s must not contain the core slice ID", name)
+			for _, value := range values {
+				require.Equal(t, strings.ToLower(value), value, "%s member %q must be lowercase", name, value)
+			}
+		}
+		for _, platform := range sets["platforms"] {
+			require.NotContains(t, sets["architectures"], platform)
+			require.NotContains(t, sets["buildTargets"], platform)
+		}
+		for _, architecture := range sets["architectures"] {
+			require.NotContains(t, sets["buildTargets"], architecture)
+		}
+	})
+
+	t.Run("every platform is handled by every consumer", func(t *testing.T) {
+		for _, platform := range KnownPlatforms() {
+			for name, consume := range consumers {
+				parsed, err := consume(platform)
+				require.NoError(t, err, "%s must accept platform %q", name, platform)
+				require.Equal(t, SliceID{Platform: platform}, parsed)
+			}
+			selection, err := SelectSlices(
+				[]string{platform},
+				Host{OperatingSystem: "plan9", Architecture: "amd64"},
+				publishedSlices(t, "core", platform),
+				false,
+			)
+			require.NoError(t, err, "SelectSlices must accept declared platform %q", platform)
+			require.Equal(t, []string{CorePlatform, platform}, sliceIDStrings(selection.Slices))
+		}
+	})
+
+	t.Run("every architecture is handled by every consumer", func(t *testing.T) {
+		for _, architecture := range KnownArchitectures() {
+			tag := "linux." + architecture
+			for name, consume := range consumers {
+				parsed, err := consume(tag)
+				require.NoError(t, err, "%s must accept %q", name, tag)
+				require.Equal(t, SliceID{Platform: "linux", Architecture: architecture}, parsed)
+			}
+		}
+	})
+
+	t.Run("every build target is dropped by reduction and rejected by both parsers", func(t *testing.T) {
+		for _, buildTarget := range KnownBuildTargets() {
+			reduced, err := ReduceLibraryKey("linux." + buildTarget)
+			require.NoError(t, err, "reduction must accept build target %q", buildTarget)
+			require.Equal(t, SliceID{Platform: "linux"}, reduced, "a build target never appears in a slice ID")
+
+			reduced, err = ReduceLibraryKey("linux." + buildTarget + ".x86_64")
+			require.NoError(t, err)
+			require.Equal(t, SliceID{Platform: "linux", Architecture: "x86_64"}, reduced)
+
+			for _, name := range []string{"ParseDeclaredPlatform", "ParseSliceID"} {
+				_, err := consumers[name]("linux." + buildTarget)
+				require.Error(t, err, "%s must reject the build target axis", name)
+				require.Equal(t, output.ExitManifest, output.CodeFor(err))
+			}
+		}
+	})
+
+	t.Run("non-members are rejected by every consumer", func(t *testing.T) {
+		for _, tag := range []string{"solaris", "solaris.x86_64", "linux.sparc", "linux.editor_debug", "linux.x64"} {
+			for name, consume := range consumers {
+				_, err := consume(tag)
+				require.Error(t, err, "%s must reject %q", name, tag)
+				require.Equal(t, output.ExitManifest, output.CodeFor(err))
+			}
+		}
+	})
 }

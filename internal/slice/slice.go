@@ -144,6 +144,10 @@ func unknownPlatformError(tag, platform string) error {
 	)
 }
 
+func fetchErrorf(format string, arguments ...any) error {
+	return &output.FetchError{Err: fmt.Errorf(format, arguments...)}
+}
+
 func manifestErrorf(format string, arguments ...any) error {
 	return &output.ManifestError{Err: fmt.Errorf(format, arguments...)}
 }
