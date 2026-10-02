@@ -6,6 +6,7 @@ import (
 
 	"github.com/cafecito-games/godot-package-manager/internal/manifest"
 	"github.com/cafecito-games/godot-package-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/slice"
 	"github.com/cafecito-games/godot-package-manager/internal/source"
 	"github.com/cafecito-games/godot-package-manager/internal/tui"
 	"github.com/spf13/cobra"
@@ -61,7 +62,8 @@ func newAddCommand(opts *Options) *cobra.Command {
 			if err := addonManifest.Save(discovered.ManifestPath); err != nil {
 				return err
 			}
-			runner := NewRunner(discovered.AddonsDir, discovered.LockPath, limitsFor(opts))
+			runner := NewRunner(discovered.AddonsDir, discovered.LockPath, discovered.StatePath, limitsFor(opts), slice.SelectDeclaredPlatforms)
+			runner.Diagnosef = func(format string, args ...any) { verbosef(cmd, opts, format, args...) }
 			if testFetcherFor != nil {
 				runner.FetcherFor = testFetcherFor
 			}

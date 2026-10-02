@@ -23,12 +23,6 @@ type SliceResult struct {
 	Size     int64         // archive size in bytes recorded in the index
 }
 
-// currentHost is the seam through which a sliced fetch resolves the machine gpm
-// is running on. slice.CurrentHost is the only resolver of a host anywhere in
-// the tree; this variable exists so a test can simulate another machine rather
-// than depending on the one it runs on.
-var currentHost = slice.CurrentHost
-
 // sliceAssetResolver maps a slice archive's bare file name, as the index
 // declares it, to the URL that archive is downloaded from, reporting false when
 // the publisher offers no such file.
@@ -83,6 +77,9 @@ type slicedFetcher struct {
 	// diagnostics are the notes the fetcher has already accumulated before the
 	// index was read, such as a manifest field the sliced path ignores.
 	diagnostics []string
+	// selectionMode is handed to slice.SelectSlices unchanged. It arrives from
+	// the Runner the CLI configured, which is the only place a mode is decided.
+	selectionMode slice.SelectionMode
 }
 
 // fetch performs the sliced download. On success the returned FetchResult.Dir is
@@ -107,8 +104,8 @@ func (f *slicedFetcher) fetch(ctx context.Context, spec manifest.AddonSpec, inde
 	}
 
 	published := index.PublishedSliceIDs()
-	host := currentHost()
-	selection, err := slice.SelectSlices(spec.Platforms, host, published, false)
+	host := slice.CurrentHost()
+	selection, err := slice.SelectSlices(spec.Platforms, host, published, f.selectionMode)
 	if err != nil {
 		return FetchResult{}, err
 	}

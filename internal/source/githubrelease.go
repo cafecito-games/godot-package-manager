@@ -29,6 +29,9 @@ type GitHubReleaseFetcher struct {
 	maxBytes int64
 	// maxExtracted overrides the extracted size cap; 0 uses maxExtractedBytes.
 	maxExtracted int64
+	// selectionMode is passed through to the sliced path; the zero value is the
+	// declared-platforms default.
+	selectionMode slice.SelectionMode
 }
 
 type ghAsset struct {
@@ -83,6 +86,7 @@ func (f *GitHubReleaseFetcher) Fetch(ctx context.Context, spec manifest.AddonSpe
 			resolve:        resolve,
 			stagingPattern: "gpm-ghrel-*",
 			diagnostics:    releaseSlicedDiagnostics(spec),
+			selectionMode:  f.selectionMode,
 		}
 		return fetcher.fetch(ctx, spec, indexURL)
 	}

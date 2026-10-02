@@ -16,6 +16,20 @@ import (
 type StateEntry struct {
 	ResolvedVersion string   `toml:"resolved_version"` // the version these slices came from
 	Slices          []string `toml:"slices"`           // slice IDs present in addons/ on this disk
+
+	// Pin identifies the lockfile pin these slices were materialized from: a
+	// sliced addon's index_sha256, or an unsliced addon's archive checksum.
+	//
+	// It is recorded because resolved_version does not identify content. A
+	// release keeps its tag when it is republished, so two branches of one
+	// repository can share an addons.toml — and therefore a spec_hash and a
+	// resolved version — while their committed addons.lock files pin different
+	// bytes. Without the pin, an entry written against one lock would satisfy
+	// the other and leave the wrong files in place, unfetched and unverified.
+	//
+	// It is empty for a source whose resolved version is already its content
+	// identity, which is every git source.
+	Pin string `toml:"pin,omitempty"`
 }
 
 // State is the parsed contents of .gpm-state.toml, a machine-local and

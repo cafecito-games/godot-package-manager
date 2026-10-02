@@ -1,11 +1,15 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strings"
 
+	"github.com/cafecito-games/godot-package-manager/internal/manifest"
 	"github.com/cafecito-games/godot-package-manager/internal/output"
 	"github.com/spf13/cobra"
 )
@@ -16,6 +20,11 @@ type addonListing struct {
 	Source    string `json:"source"`
 	Version   string `json:"version"`
 	Installed bool   `json:"installed"`
+
+	// Slices is what this machine has materialized, read from .gpm-state.toml.
+	// It is never read from the lock's slices table, which records the set the
+	// addon publishes rather than the set that is on this disk.
+	Slices []string `json:"slices,omitempty"`
 }
 
 // newListCommand builds `gpm list`.
@@ -30,7 +39,17 @@ func newListCommand(opts *Options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			verbosef(cmd, opts, "project: %s\nmanifest: %s\nlockfile: %s\n", discovered.Root, discovered.ManifestPath, discovered.LockPath)
+			verbosef(cmd, opts, "project: %s\nmanifest: %s\nlockfile: %s\nstate: %s\n",
+				discovered.Root, discovered.ManifestPath, discovered.LockPath, discovered.StatePath)
+			state, err := manifest.LoadState(discovered.StatePath)
+			var corrupt *manifest.CorruptStateError
+			if errors.As(err, &corrupt) {
+				// An unreadable machine-local cache is not a reason to fail a
+				// read-only listing: the slice column is simply empty.
+				verbosef(cmd, opts, "%v\n", corrupt)
+			} else if err != nil {
+				return err
+			}
 			names := make([]string, 0, len(addonManifest.Addons))
 			for name := range addonManifest.Addons {
 				names = append(names, name)
@@ -48,6 +67,7 @@ func newListCommand(opts *Options) *cobra.Command {
 					Source:    string(spec.Source),
 					Version:   spec.Version,
 					Installed: installed,
+					Slices:    slices.Clone(state.Addons[name].Slices),
 				})
 			}
 			return output.Render(cmd.OutOrStdout(), opts.JSON, listings, func() {
@@ -59,7 +79,11 @@ func newListCommand(opts *Options) *cobra.Command {
 					if listing.Installed {
 						mark = "x"
 					}
-					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "[%s] %-20s %-16s %s\n", mark, listing.Name, listing.Source, listing.Version)
+					line := fmt.Sprintf("[%s] %-20s %-16s %s", mark, listing.Name, listing.Source, listing.Version)
+					if len(listing.Slices) > 0 {
+						line += "  " + strings.Join(listing.Slices, " ")
+					}
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), line)
 				}
 			})
 		},

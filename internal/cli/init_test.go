@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/cafecito-games/godot-package-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/project"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,4 +31,91 @@ func TestInitDoesNotOverwrite(t *testing.T) {
 	require.Error(t, err)
 	var manifestErr *output.ManifestError
 	require.ErrorAs(t, err, &manifestErr)
+}
+
+// TestInitGitignoresTheStateFile pins that the machine-local state file is
+// ignored by default: committing it would publish one machine's slice layout to
+// the whole team.
+func TestInitGitignoresTheStateFile(t *testing.T) {
+	t.Run("creates .gitignore when none exists", func(t *testing.T) {
+		dir := t.TempDir()
+		cmd := newInitCommand(&Options{})
+		cmd.SetArgs([]string{"--dir", dir})
+		require.NoError(t, cmd.Execute())
+
+		data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+		require.NoError(t, err)
+		require.Equal(t, project.StateFileName+"\n", string(data))
+	})
+
+	t.Run("appends to an existing .gitignore", func(t *testing.T) {
+		dir := t.TempDir()
+		gitignore := filepath.Join(dir, ".gitignore")
+		require.NoError(t, os.WriteFile(gitignore, []byte(".godot/\nexport_presets.cfg"), 0o644))
+
+		cmd := newInitCommand(&Options{})
+		cmd.SetArgs([]string{"--dir", dir})
+		require.NoError(t, cmd.Execute())
+
+		data, err := os.ReadFile(gitignore)
+		require.NoError(t, err)
+		require.Equal(t, ".godot/\nexport_presets.cfg\n"+project.StateFileName+"\n", string(data))
+	})
+
+	t.Run("leaves an existing entry alone", func(t *testing.T) {
+		dir := t.TempDir()
+		gitignore := filepath.Join(dir, ".gitignore")
+		existing := ".godot/\n  " + project.StateFileName + "  \n"
+		require.NoError(t, os.WriteFile(gitignore, []byte(existing), 0o644))
+
+		cmd := newInitCommand(&Options{})
+		cmd.SetArgs([]string{"--dir", dir})
+		require.NoError(t, cmd.Execute())
+
+		data, err := os.ReadFile(gitignore)
+		require.NoError(t, err)
+		require.Equal(t, existing, string(data), "an entry already present is not duplicated")
+	})
+}
+
+// TestInitLeavesNoManifestWhenTheGitignoreIsUnusable pins that a failed init
+// performs no mutation it cannot retry: the idempotent .gitignore entry is
+// handled first, so a failure there leaves no addons.toml for the retry to trip
+// over.
+func TestInitLeavesNoManifestWhenTheGitignoreIsUnusable(t *testing.T) {
+	dir := t.TempDir()
+	// A directory where .gitignore belongs is not a file gpm will write, and it
+	// gets there without depending on the suite's effective user as a
+	// mode-based test would.
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".gitignore"), 0o755))
+
+	cmd := newInitCommand(&Options{})
+	cmd.SetArgs([]string{"--dir", dir})
+	require.Error(t, cmd.Execute())
+
+	_, err := os.Stat(filepath.Join(dir, "addons.toml"))
+	require.True(t, os.IsNotExist(err), "a failed init must not leave a manifest behind")
+}
+
+// TestInitRefusesToWriteThroughAGitignoreSymlink pins that a
+// repository-controlled path is not followed. Git stores symbolic links
+// faithfully, so a cloned repository could otherwise point .gitignore at any
+// writable file and have `gpm init` append to it.
+func TestInitRefusesToWriteThroughAGitignoreSymlink(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.conf")
+	require.NoError(t, os.WriteFile(outside, []byte("do not touch\n"), 0o644))
+	require.NoError(t, os.Symlink(outside, filepath.Join(dir, ".gitignore")))
+
+	cmd := newInitCommand(&Options{})
+	cmd.SetArgs([]string{"--dir", dir})
+	err := cmd.Execute()
+	require.Error(t, err)
+	var manifestErr *output.ManifestError
+	require.ErrorAs(t, err, &manifestErr)
+
+	require.Equal(t, "do not touch\n", string(readFileBytes(t, outside)),
+		"the symlink target must be untouched")
+	_, statErr := os.Stat(filepath.Join(dir, "addons.toml"))
+	require.True(t, os.IsNotExist(statErr))
 }

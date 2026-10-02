@@ -23,14 +23,36 @@ type Selection struct {
 	HostSupported bool
 }
 
+// SelectionMode chooses how wide a needed slice set SelectSlices computes. The
+// zero value is the default a project gets with no flags: the platforms it
+// declares plus the host's own slice.
+//
+// A mode changes which slices are materialized and nothing else. Declared
+// platforms are validated in every mode, because a platform the addon does not
+// publish is a manifest mistake however little of the addon this machine wants.
+type SelectionMode int
+
+const (
+	// SelectDeclaredPlatforms selects core, every declared platform, and the
+	// host's own slice. This is the shipping default.
+	SelectDeclaredPlatforms SelectionMode = iota
+	// SelectAllPublishedSlices selects every slice the addon publishes, for
+	// projects that vendor addons/ into git.
+	SelectAllPublishedSlices
+	// SelectHostOnly selects core and the host's own slice, ignoring the
+	// declared platforms. It is a development convenience for checkouts that
+	// only ever run the host's editor; declared platforms are still validated.
+	SelectHostOnly
+)
+
 // SelectSlices computes the slices a project needs: the mandatory core slice,
 // the platforms it declares, and the host's own slice, which is implicit so that
 // a manifest written on one machine does not break a teammate on another.
 //
-// With allPlatforms every published slice is selected, for projects that vendor
-// addons/ into git. Declared platforms are validated in that case too, because a
-// platform the addon does not publish is a manifest mistake either way.
-func SelectSlices(declared []string, host Host, published []SliceID, allPlatforms bool) (Selection, error) {
+// mode widens or narrows that set: SelectAllPublishedSlices adds every published
+// slice, and SelectHostOnly drops the declared platforms, leaving core plus the
+// host. Declared platforms are validated in every mode.
+func SelectSlices(declared []string, host Host, published []SliceID, mode SelectionMode) (Selection, error) {
 	publishedSet := make(map[SliceID]struct{}, len(published))
 	for _, id := range published {
 		publishedSet[id] = struct{}{}
@@ -54,7 +76,11 @@ func SelectSlices(declared []string, host Host, published []SliceID, allPlatform
 				id, describeSliceIDs(published),
 			)
 		}
-		needed[id] = struct{}{}
+		// Validated above in every mode; only materialized when the mode asks
+		// for the declared platforms.
+		if mode != SelectHostOnly {
+			needed[id] = struct{}{}
+		}
 	}
 
 	selection := Selection{}
@@ -67,7 +93,7 @@ func SelectSlices(declared []string, host Host, published []SliceID, allPlatform
 		}
 	}
 
-	if allPlatforms {
+	if mode == SelectAllPublishedSlices {
 		for id := range publishedSet {
 			needed[id] = struct{}{}
 		}

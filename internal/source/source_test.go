@@ -5,6 +5,7 @@ import (
 
 	"github.com/cafecito-games/godot-package-manager/internal/manifest"
 	"github.com/cafecito-games/godot-package-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/slice"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,7 +37,7 @@ func TestFetcherForUnknownType(t *testing.T) {
 
 func TestFetcherForWithLimitsPropagatesToArchive(t *testing.T) {
 	limits := Limits{MaxDownloadBytes: 7, MaxExtractedBytes: 11}
-	fetcher, err := FetcherForWithLimits(limits)(manifest.AddonSpec{Source: manifest.SourceArchive})
+	fetcher, err := FetcherForWithLimits(limits, slice.SelectDeclaredPlatforms)(manifest.AddonSpec{Source: manifest.SourceArchive})
 	require.NoError(t, err)
 	archive, ok := fetcher.(*ArchiveFetcher)
 	require.True(t, ok)
@@ -46,7 +47,7 @@ func TestFetcherForWithLimitsPropagatesToArchive(t *testing.T) {
 
 func TestFetcherForWithLimitsPropagatesToGitHubRelease(t *testing.T) {
 	limits := Limits{MaxDownloadBytes: 13, MaxExtractedBytes: 17}
-	fetcher, err := FetcherForWithLimits(limits)(manifest.AddonSpec{Source: manifest.SourceGitHubRelease})
+	fetcher, err := FetcherForWithLimits(limits, slice.SelectDeclaredPlatforms)(manifest.AddonSpec{Source: manifest.SourceGitHubRelease})
 	require.NoError(t, err)
 	ghRelease, ok := fetcher.(*GitHubReleaseFetcher)
 	require.True(t, ok)
@@ -55,7 +56,7 @@ func TestFetcherForWithLimitsPropagatesToGitHubRelease(t *testing.T) {
 }
 
 func TestFetcherForWithZeroLimitsLeavesDefaults(t *testing.T) {
-	fetcher, err := FetcherForWithLimits(Limits{})(manifest.AddonSpec{Source: manifest.SourceArchive})
+	fetcher, err := FetcherForWithLimits(Limits{}, slice.SelectDeclaredPlatforms)(manifest.AddonSpec{Source: manifest.SourceArchive})
 	require.NoError(t, err)
 	archive, ok := fetcher.(*ArchiveFetcher)
 	require.True(t, ok)
