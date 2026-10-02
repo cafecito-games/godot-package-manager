@@ -44,7 +44,7 @@ func PartitionExtension(content []byte, addonRoot string) ([]byte, map[SliceID]E
 	if err != nil {
 		return nil, nil, manifestErrorf("partitioning .gdextension: %s", err)
 	}
-	if err := document.rejectDuplicatePartitionedSections(); err != nil {
+	if err := document.validatePartitionedSectionHeaders(); err != nil {
 		return nil, nil, manifestErrorf("partitioning .gdextension: %s", err)
 	}
 
@@ -106,9 +106,11 @@ func PartitionExtension(content []byte, addonRoot string) ([]byte, map[SliceID]E
 // .gdextension describing exactly the binaries on disk.
 //
 // Output is deterministic and idempotent: entries are emitted sorted by key
-// within their section, sections in the order of PartitionedSections, so two
-// machines installing the same slice set write identical bytes and a repeat
-// install does not dirty the working tree.
+// within their section, and the sections themselves keep the position the author
+// gave them in the core body rather than being reordered, so two machines
+// installing the same slice set write identical bytes and a repeat install does
+// not dirty the working tree. Validation walks PartitionedSections in order, so
+// a file with problems in both sections always reports the same one.
 //
 // Every failure is an *output.FetchError: a core body and the entries beside it
 // are remote content published by the addon's producer, and a mismatch between
@@ -119,7 +121,7 @@ func ReassembleExtension(core []byte, entries map[SliceID]ExtensionEntries, sele
 	if err != nil {
 		return nil, fetchErrorf("reassembling .gdextension: %s", err)
 	}
-	if err := document.rejectDuplicatePartitionedSections(); err != nil {
+	if err := document.validatePartitionedSectionHeaders(); err != nil {
 		return nil, fetchErrorf("reassembling .gdextension: %s", err)
 	}
 	for _, section := range PartitionedSections() {

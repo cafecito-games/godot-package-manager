@@ -229,6 +229,35 @@ func TestExtensionReassemblyIsDeterministicAndIdempotent(t *testing.T) {
 		"sections are emitted in the order of PartitionedSections")
 }
 
+// TestExtensionReassemblySortsEntriesAcrossSlices pins the sort that determinism
+// actually depends on. Within one slice the entries are already visited in key
+// order, so the sort only shows itself where two slices contribute keys to one
+// section whose order disagrees with the order of the slices themselves: the
+// "macos" slice owns "macos.template_debug" while the "macos.arm64" slice owns
+// "macos.arm64", and the slice order is the reverse of the key order.
+func TestExtensionReassemblySortsEntriesAcrossSlices(t *testing.T) {
+	const content = `[configuration]
+
+entry_symbol = "demo_init"
+
+[libraries]
+
+macos.template_debug = "res://addons/demo/bin/libdemo.macos.framework"
+macos.arm64 = "res://addons/demo/bin/libdemo.macos.arm64.framework"
+`
+	core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+	require.NoError(t, err)
+	require.Contains(t, removed, SliceID{Platform: "macos"})
+	require.Contains(t, removed, SliceID{Platform: "macos", Architecture: "arm64"})
+
+	reassembled, err := ReassembleExtension(core, removed, allSlices(removed))
+	require.NoError(t, err)
+	require.Less(t,
+		strings.Index(string(reassembled), "macos.arm64 ="),
+		strings.Index(string(reassembled), "macos.template_debug ="),
+		"entries of one section are sorted by key even when their slices sort the other way")
+}
+
 func TestExtensionPartitionDoesNotMutateItsInput(t *testing.T) {
 	original, err := os.ReadFile("testdata/real/terrabrush.gdextension")
 	require.NoError(t, err)
@@ -505,6 +534,14 @@ windows.release.x86_64 = "res://addons/demo/bin/libother.dll"`,
 			expectedMessage: []string{"dictionary", "exactly one quoted"},
 		},
 		{
+			name: "value is a dictionary written across several lines",
+			body: `ios.release = {
+	"res://addons/demo/bin/libdemo.a" : "",
+	"res://addons/demo/bin/libother.a" : ""
+}`,
+			expectedMessage: []string{"dictionary", "ios.release"},
+		},
+		{
 			name:            "value is not quoted",
 			body:            `windows.release.x86_64 = 42`,
 			expectedMessage: []string{"42", "not a quoted"},
@@ -585,6 +622,16 @@ func TestExtensionPartitionIsFailClosedOnTheDocument(t *testing.T) {
 			expectedMessage: []string{"line 2", "never closed"},
 		},
 		{
+			name:            "partitioned section spelled with different case",
+			content:         "[Libraries]\n\nmacos.debug = \"res://addons/demo/bin/a.framework\"\n",
+			expectedMessage: []string{"[Libraries]", "[libraries]", "case-sensitive"},
+		},
+		{
+			name:            "dependencies section spelled with different case",
+			content:         "[libraries]\n\n[DEPENDENCIES]\n\nmacos.debug = \"res://addons/demo/bin/a.dylib\"\n",
+			expectedMessage: []string{"[DEPENDENCIES]", "[dependencies]", "case-sensitive"},
+		},
+		{
 			name:            "partitioned section declared twice",
 			content:         "[libraries]\n\nmacos.debug = \"res://addons/demo/bin/a.framework\"\n\n[libraries]\n\nios.debug = \"res://addons/demo/bin/b.xcframework\"\n",
 			expectedMessage: []string{"[libraries]", "more than once"},
@@ -652,6 +699,12 @@ func TestExtensionReassemblyIsFailClosed(t *testing.T) {
 			core:            []byte("[libraries]\n\n[dependencies]\n\n[libraries]\n"),
 			selected:        []SliceID{CoreSliceID()},
 			expectedMessage: []string{"[libraries]", "more than once"},
+		},
+		{
+			name:            "core body spells a partitioned section with different case",
+			core:            []byte("[Libraries]\n"),
+			selected:        []SliceID{CoreSliceID()},
+			expectedMessage: []string{"[Libraries]", "case-sensitive"},
 		},
 		{
 			name:            "a selected slice has no entries in the index",
@@ -848,4 +901,46 @@ func requireManifestError(t *testing.T, err error, fragments ...string) {
 	for _, fragment := range fragments {
 		require.Contains(t, err.Error(), fragment)
 	}
+}
+
+// TestExtensionPartitionPreservesAFileWithNoFinalNewline covers the byte-fidelity
+// edge of a file whose last line has no ending: a document with nothing to
+// partition comes back unchanged, and one whose last section is partitioned still
+// ends with a line ending so its entries have a line of their own to go on.
+func TestExtensionPartitionPreservesAFileWithNoFinalNewline(t *testing.T) {
+	t.Run("nothing to partition", func(t *testing.T) {
+		const content = "[configuration]\n\nentry_symbol = \"demo_init\"\n\n[icons]\n\nDemoNode = \"res://addons/demo/demo_node.svg\""
+		core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+		require.NoError(t, err)
+		require.Empty(t, removed)
+		require.Equal(t, content, string(core), "a document with no partitioned entry is reproduced byte for byte")
+
+		reassembled, err := ReassembleExtension(core, removed, []SliceID{CoreSliceID()})
+		require.NoError(t, err)
+		require.Equal(t, content, string(reassembled))
+	})
+
+	t.Run("partitioned section ends the file", func(t *testing.T) {
+		const content = "[configuration]\n\nentry_symbol = \"demo_init\"\n\n[libraries]\n\nmacos.debug = \"res://addons/demo/bin/libdemo.framework\""
+		core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+		require.NoError(t, err)
+		require.Equal(t, "[configuration]\n\nentry_symbol = \"demo_init\"\n\n[libraries]\n", string(core))
+
+		reassembled, err := ReassembleExtension(core, removed, allSlices(removed))
+		require.NoError(t, err)
+		require.Equal(t, sectionsOf(t, []byte(content)), sectionsOf(t, reassembled))
+
+		secondCore, secondRemoved, err := PartitionExtension(reassembled, demoAddonRoot)
+		require.NoError(t, err)
+		require.Equal(t, string(core), string(secondCore))
+		require.Equal(t, removed, secondRemoved)
+	})
+
+	t.Run("partitioned header ends the file", func(t *testing.T) {
+		const content = "[configuration]\n\nentry_symbol = \"demo_init\"\n\n[libraries]"
+		core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+		require.NoError(t, err)
+		require.Empty(t, removed)
+		require.Equal(t, "[configuration]\n\nentry_symbol = \"demo_init\"\n\n[libraries]\n", string(core))
+	})
 }

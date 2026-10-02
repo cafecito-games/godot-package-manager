@@ -131,14 +131,33 @@ func (document *godotConfigDocument) block(section ExtensionSection) *godotConfi
 	return nil
 }
 
-// rejectDuplicatePartitionedSections fails on a document declaring a partitioned
-// section twice. Godot merges repeated sections, but a partition that emptied
-// one header and left the other would silently drop entries, so the ambiguity is
-// reported instead of resolved.
-func (document *godotConfigDocument) rejectDuplicatePartitionedSections() error {
+// validatePartitionedSectionHeaders rejects the two header shapes that would make
+// a partition lose entries rather than move them.
+//
+// A partitioned section declared twice is ambiguous: Godot merges repeated
+// sections, but emptying one header and leaving the other would silently drop
+// entries, so the ambiguity is reported instead of resolved.
+//
+// A header differing from a partitioned section only in case is rejected rather
+// than treated as an unrecognized section. Godot's section names are
+// case-sensitive, so such a section is already broken; treating it as unknown
+// would preserve it verbatim and copy its platform-tagged entries straight into
+// the core body, where they would name binaries no slice installs.
+func (document *godotConfigDocument) validatePartitionedSectionHeaders() error {
 	seen := map[string]struct{}{}
 	for _, block := range document.blocks {
+		if block.name == "" {
+			continue
+		}
 		if !slices.Contains(partitionedSections, ExtensionSection(block.name)) {
+			for _, section := range partitionedSections {
+				if strings.EqualFold(block.name, string(section)) {
+					return fmt.Errorf(
+						"section [%s] differs from [%s] only in case, and section names are case-sensitive",
+						block.name, section,
+					)
+				}
+			}
 			continue
 		}
 		if _, found := seen[block.name]; found {
