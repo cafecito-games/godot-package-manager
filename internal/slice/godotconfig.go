@@ -250,15 +250,13 @@ func parseGodotConfigEntry(lines []string, start int) (godotConfigEntry, int, er
 	}
 
 	scan := valueScan{}
-	scan.consume(value)
+	value = scan.consume(value)
 	consumed := 1
 	for scan.incomplete() {
 		if start+consumed >= len(lines) {
 			return godotConfigEntry{}, 0, fmt.Errorf("line %d: the value of %q is never closed", start+1, key)
 		}
-		continuation := trimLineEnding(lines[start+consumed])
-		value += lineFeed + continuation
-		scan.consume(continuation)
+		value += lineFeed + scan.consume(trimLineEnding(lines[start+consumed]))
 		consumed++
 	}
 	return godotConfigEntry{key: key, value: strings.TrimSpace(value)}, consumed, nil
@@ -272,8 +270,23 @@ type valueScan struct {
 	escaped  bool
 }
 
-func (scan *valueScan) consume(text string) {
-	for _, character := range text {
+// consume scans one line of a value and returns the part of it that is value
+// rather than commentary.
+//
+// A comment introducer outside a string ends the line's value. Scanning the
+// comment too would read its punctuation as value syntax, so an ordinary
+// trailing comment carrying an opening delimiter or an unpaired quote — "; see
+// (upstream" — would make the value look unfinished and swallow the section
+// headers that follow it. Everything after the introducer is dropped from the
+// value; the line itself is still retained in full, so a comment in a section
+// that is preserved verbatim comes back unchanged.
+func (scan *valueScan) consume(text string) string {
+	significant := text
+	for index, character := range text {
+		if !scan.inString && !scan.escaped && (character == ';' || character == '#') {
+			significant = text[:index]
+			break
+		}
 		switch {
 		case scan.escaped:
 			scan.escaped = false
@@ -293,6 +306,7 @@ func (scan *valueScan) consume(text string) {
 	// A backslash at the end of a line escapes nothing on the next one in Godot's
 	// config format, so the escape never carries across a line.
 	scan.escaped = false
+	return strings.TrimRight(significant, " \t")
 }
 
 func (scan *valueScan) incomplete() bool { return scan.depth > 0 || scan.inString }

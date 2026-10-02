@@ -249,8 +249,8 @@ func requireWithinAddonRoot(root, value string) error {
 }
 
 // parseExtensionValue reads a partitioned entry's value, which is one quoted
-// res:// path and nothing else. A trailing comment is permitted, because authors
-// write them.
+// res:// path and nothing else. A trailing comment never reaches here: the parser
+// drops it along with the rest of the line's commentary.
 //
 // Godot also accepts a dictionary as a [dependencies] value, mapping each
 // dependency to the subdirectory it is copied into on export. gpm's index
@@ -275,7 +275,7 @@ func parseExtensionValue(raw string) (string, error) {
 	if end < 0 {
 		return "", fmt.Errorf("value %s is not a closed string", summarizeValue(raw))
 	}
-	if trailing := strings.TrimSpace(rest[end+1:]); trailing != "" && !isComment(trailing) {
+	if trailing := strings.TrimSpace(rest[end+1:]); trailing != "" {
 		return "", fmt.Errorf(
 			"value %s is followed by %q, which is neither whitespace nor a comment",
 			summarizeValue(raw), trailing,

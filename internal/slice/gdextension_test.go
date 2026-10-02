@@ -944,3 +944,70 @@ func TestExtensionPartitionPreservesAFileWithNoFinalNewline(t *testing.T) {
 		require.Equal(t, "[configuration]\n\nentry_symbol = \"demo_init\"\n\n[libraries]\n", string(core))
 	})
 }
+
+// TestExtensionPartitionDoesNotReadCommentsAsValueSyntax pins a comment's text as
+// text. An opening delimiter or an unpaired quote inside a trailing comment used
+// to be read as the start of a multi-line value, which swallowed the section
+// headers that followed it: platform-tagged entries then either survived into the
+// core body unrecognized, where they would name binaries no slice installs, or
+// disappeared from both the core body and the partitioned entries.
+func TestExtensionPartitionDoesNotReadCommentsAsValueSyntax(t *testing.T) {
+	rows := []struct {
+		name    string
+		comment string
+	}{
+		{"unbalanced brace", "; TODO: see {upstream"},
+		{"unbalanced parenthesis", "; note (see upstream"},
+		{"unbalanced bracket", "; note [see upstream"},
+		{"unpaired quote", `; see "upstream`},
+		{"hash introducer", "# note (see upstream"},
+	}
+
+	for _, row := range rows {
+		t.Run("before a partitioned section/"+row.name, func(t *testing.T) {
+			content := fmt.Sprintf(
+				"[configuration]\n\nentry_symbol = \"demo_init\" %s\n\n[libraries]\n\nmacos.debug = \"res://addons/demo/bin/a.framework\"\n",
+				row.comment,
+			)
+			core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+			require.NoError(t, err)
+			require.Equal(t, map[SliceID]ExtensionEntries{
+				{Platform: "macos"}: {SectionLibraries: {"macos.debug": "res://addons/demo/bin/a.framework"}},
+			}, removed)
+			require.NotContains(t, string(core), "a.framework",
+				"a comment must not hide a platform-tagged entry in the core body")
+			require.Contains(t, string(core), row.comment, "the comment itself is preserved verbatim")
+		})
+
+		t.Run("inside a partitioned section/"+row.name, func(t *testing.T) {
+			content := fmt.Sprintf(
+				"[libraries]\n\nmacos.debug = \"res://addons/demo/bin/a.framework\" %s\n\n[dependencies]\n\nmacos.debug = \"res://addons/demo/bin/b.dylib\"\n",
+				row.comment,
+			)
+			_, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+			require.NoError(t, err)
+			require.Equal(t, map[SliceID]ExtensionEntries{
+				{Platform: "macos"}: {
+					SectionLibraries:    {"macos.debug": "res://addons/demo/bin/a.framework"},
+					SectionDependencies: {"macos.debug": "res://addons/demo/bin/b.dylib"},
+				},
+			}, removed, "a comment must not swallow the section that follows it")
+		})
+	}
+}
+
+// TestExtensionPartitionAcceptsATrailingCommentOnAnEntry asserts the comment is
+// dropped from the value rather than becoming part of the path.
+func TestExtensionPartitionAcceptsATrailingCommentOnAnEntry(t *testing.T) {
+	const content = `[libraries]
+
+macos.debug = "res://addons/demo/bin/a.framework" ; the debug build
+ios.debug = "res://addons/demo/bin/b.xcframework" # the debug build
+`
+	_, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+	require.NoError(t, err)
+	require.Equal(t, map[SliceID]ExtensionEntries{
+		{Platform: "macos"}: {SectionLibraries: {"macos.debug": "res://addons/demo/bin/a.framework"}},
+		{Platform: "ios"}:   {SectionLibraries: {"ios.debug": "res://addons/demo/bin/b.xcframework"}},
+	}, removed)
+}
