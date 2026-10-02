@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -44,6 +45,10 @@ type archiveFile struct {
 
 	sourcePath string
 	content    []byte
+
+	// walkedInfo is the file the tree walk accepted at sourcePath, when there was
+	// one. It is compared against the file actually opened.
+	walkedInfo fs.FileInfo
 
 	// executable records whether the source file had any execute bit set.
 	executable bool
@@ -128,7 +133,7 @@ func writeArchiveEntry(writer *zip.Writer, file archiveFile) error {
 		}
 		return nil
 	}
-	source, err := openRegularFile(file.sourcePath)
+	source, err := openRegularFile(file.sourcePath, file.walkedInfo)
 	if err != nil {
 		return err
 	}
@@ -149,7 +154,7 @@ func writeArchiveEntry(writer *zip.Writer, file archiveFile) error {
 // whatever the link points at, which may be any readable file outside the addon
 // root. The open flag refuses the link where the platform has one, and the check
 // on the opened file refuses it everywhere.
-func openRegularFile(path string) (*os.File, error) {
+func openRegularFile(path string, walkedInfo fs.FileInfo) (*os.File, error) {
 	// Reported as a manifest failure, matching what the tree walk says about a
 	// symlink: whatever changed under the packager, a link in the subtree is the
 	// author's tree to fix.
@@ -175,6 +180,20 @@ func openRegularFile(path string) (*os.File, error) {
 		_ = file.Close()
 		return nil, manifestErrorf(
 			"%s is no longer a regular file; a slice archive carries regular files only", path,
+		)
+	}
+	// The open flag and the two mode checks only ever see the path's last
+	// component, so an ancestor directory replaced by a symlink would resolve
+	// cleanly and hand back a file from somewhere else entirely. Comparing the
+	// opened file's identity with the one the walk accepted closes that, whatever
+	// component changed, and it also reports an addon tree edited while it was
+	// being packaged rather than publishing a release assembled from two states
+	// of the tree.
+	if walkedInfo != nil && !os.SameFile(walkedInfo, info) {
+		_ = file.Close()
+		return nil, manifestErrorf(
+			"%s changed while the addon was being packaged; it is no longer the file the tree walk accepted",
+			path,
 		)
 	}
 	return file, nil
@@ -210,8 +229,8 @@ func measureArchive(path string) (string, int64, error) {
 
 // readRegularFile reads a file through the same symlink guard an archive source
 // goes through, for content the packager reads rather than copies.
-func readRegularFile(path string) ([]byte, error) {
-	file, err := openRegularFile(path)
+func readRegularFile(path string, walkedInfo fs.FileInfo) ([]byte, error) {
+	file, err := openRegularFile(path, walkedInfo)
 	if err != nil {
 		return nil, err
 	}

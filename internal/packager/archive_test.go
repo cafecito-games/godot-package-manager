@@ -91,3 +91,27 @@ func TestWriteArchiveRefusesASourceThatIsASymlink(t *testing.T) {
 	_, statErr := os.Stat(archivePath)
 	require.True(t, os.IsNotExist(statErr))
 }
+
+func TestWriteArchiveRefusesASourceThatIsNoLongerTheWalkedFile(t *testing.T) {
+	directory := t.TempDir()
+	source := filepath.Join(directory, "plugin.gd")
+	require.NoError(t, os.WriteFile(source, []byte("walked"), 0o644))
+	walked, err := os.Lstat(source)
+	require.NoError(t, err)
+
+	// A different file behind the same path, which is what an ancestor directory
+	// replaced by a symlink produces: every component resolves, but the bytes
+	// come from somewhere else.
+	other := filepath.Join(directory, "other.gd")
+	require.NoError(t, os.WriteFile(other, []byte("substituted"), 0o644))
+
+	archivePath := filepath.Join(t.TempDir(), "addon-core.zip")
+	err = writeArchive(archivePath, []archiveFile{
+		{archivePath: "plugin.gd", sourcePath: other, walkedInfo: walked},
+	})
+	require.Error(t, err)
+	require.Equal(t, output.ExitManifest, output.CodeFor(err))
+	require.Contains(t, err.Error(), "changed")
+	_, statErr := os.Stat(archivePath)
+	require.True(t, os.IsNotExist(statErr))
+}

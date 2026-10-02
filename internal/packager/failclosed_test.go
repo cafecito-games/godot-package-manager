@@ -119,8 +119,8 @@ func TestPackageFailClosedContract(t *testing.T) {
 		},
 		{
 			name:     "addon_path is a file",
-			config:   "[package]\nname = \"addon\"\naddon_path = \"addons/addon/plugin.gd\"\nversion = \"1.2.3\"\n",
-			files:    minimalFiles(),
+			config:   validConfig,
+			files:    map[string]string{"addons/addon": "not a directory\n"},
 			wantCode: output.ExitManifest,
 			wantText: "not a directory",
 		},
@@ -505,4 +505,45 @@ func TestPackageRefusesANameThatCannotBeAnAssetName(t *testing.T) {
 	remaining, readErr := os.ReadDir(outputDirectory)
 	require.NoError(t, readErr)
 	require.Empty(t, remaining, "a refused name still produced output")
+}
+
+func TestPackageRequiresTheAddonPathToBeWhereTheAddonInstalls(t *testing.T) {
+	root := writeAddon(t, `
+[package]
+name       = "addon"
+addon_path = "source/addon"
+version    = "1.2.3"
+`, map[string]string{"source/addon/plugin.gd": "extends Node\n"})
+
+	_, err := packager.Package(packager.Options{Directory: root, OutputDirectory: t.TempDir()})
+	require.Error(t, err)
+	require.Equal(t, output.ExitManifest, output.CodeFor(err))
+	require.Contains(t, err.Error(), "addons/addon")
+}
+
+func TestPackageEmitsEntryValuesRootedWhereTheAddonInstalls(t *testing.T) {
+	root := writeAddon(t, validConfig, nativeFiles(linuxExtension))
+
+	result, err := packager.Package(packager.Options{Directory: root, OutputDirectory: t.TempDir()})
+	require.NoError(t, err)
+	index := loadEmittedIndex(t, result.Index)
+	require.Equal(t,
+		"res://addons/addon/bin/addon_linux.so",
+		index.Slices["linux.x86_64"].Libraries["addon.gdextension"]["linux.template_release.x86_64"],
+	)
+}
+
+func TestPackageRefusesAnOutputDirectoryReachingTheAddonSubtreeByCaseAlias(t *testing.T) {
+	root := writeAddon(t, validConfig, minimalFiles())
+	if _, err := os.Stat(filepath.Join(root, "ADDONS")); err != nil {
+		t.Skip("the filesystem is case-sensitive, so no case alias exists")
+	}
+
+	_, err := packager.Package(packager.Options{
+		Directory:       root,
+		OutputDirectory: filepath.Join(root, "ADDONS", "addon", "dist"),
+	})
+	require.Error(t, err)
+	require.Equal(t, output.ExitManifest, output.CodeFor(err))
+	require.Contains(t, err.Error(), "inside the addon subtree")
 }

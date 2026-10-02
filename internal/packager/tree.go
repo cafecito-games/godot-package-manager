@@ -22,6 +22,14 @@ type treeFile struct {
 
 	// executable records whether any execute bit is set on disk.
 	executable bool
+
+	// walkedInfo is the file the walk accepted, kept so that whatever is behind
+	// relativePath when the archive reads it can be checked to be that same file.
+	// The walk records paths rather than open handles, so every later read
+	// re-resolves the path; comparing identities is what makes an ancestor
+	// directory replaced by a symlink a reported failure rather than a silent
+	// substitution.
+	walkedInfo fs.FileInfo
 }
 
 // addonTree is the addon subtree as packaging sees it: every regular file under
@@ -92,6 +100,7 @@ func walkAddonTree(root string) (*addonTree, error) {
 			relativePath: relativePath,
 			sourcePath:   path,
 			executable:   info.Mode().Perm()&0o111 != 0,
+			walkedInfo:   info,
 		})
 		return nil
 	})

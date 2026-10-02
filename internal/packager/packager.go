@@ -95,6 +95,9 @@ func Package(options Options) (*Result, error) {
 		return nil, manifestErrorf("%s: %s", configPath, err)
 	}
 
+	if err := requireInstallPath(config.Package.Name, config.Package.AddonPath); err != nil {
+		return nil, manifestErrorf("%s: %s", configPath, err)
+	}
 	addonRoot, err := resolveAddonRoot(repositoryRoot, config.Package.AddonPath)
 	if err != nil {
 		return nil, err
@@ -104,10 +107,10 @@ func Package(options Options) (*Result, error) {
 		return nil, err
 	}
 
-	// The addon's res:// root. It is derived from addon_path rather than from the
-	// addon's name, because addon_path is the subtree the author publishes and
-	// every entry value in their .gdextension is written against where that
-	// subtree sits in a project.
+	// The addon's res:// root, which is both where the subtree sits in the
+	// author's own project and where a consumer installs it. requireInstallPath
+	// above makes those the same string, so an entry value the author wrote as a
+	// res:// path in their working project is also the value a consumer resolves.
 	resourceRoot := resourcePrefix + config.Package.AddonPath
 
 	partitioned, coreBodies, err := partitionExtensions(tree, resourceRoot)
@@ -224,7 +227,7 @@ func partitionExtensions(
 		// the file behind it is re-resolved here, so a .gdextension replaced by a
 		// link would otherwise partition a file from outside the addon root into
 		// the published core body.
-		content, err := readRegularFile(file.sourcePath)
+		content, err := readRegularFile(file.sourcePath, file.walkedInfo)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -511,6 +514,7 @@ func archiveFilesOf(
 			archivePath: relativePath,
 			sourcePath:  file.sourcePath,
 			executable:  file.executable,
+			walkedInfo:  file.walkedInfo,
 		})
 	}
 	return files, nil
@@ -646,21 +650,13 @@ func prepareOutputDirectory(repositoryRoot, outputDirectory, addonRoot string) (
 	if err := os.MkdirAll(outputDirectory, 0o755); err != nil {
 		return "", installErrorf("creating the output directory %s: %s", outputDirectory, err)
 	}
-	// Checked again once the directory exists, this time on both paths with every
-	// symlink resolved. The lexical check above catches the ordinary mistake
-	// before anything is created; this one catches an output path that only
-	// reaches the addon subtree through a link, which the lexical comparison
-	// cannot see, and it also makes the comparison sound on a platform where the
-	// repository itself sits under a symlinked prefix.
-	resolvedOutput, err := filepath.EvalSymlinks(outputDirectory)
-	if err != nil {
-		return "", installErrorf("resolving the output directory %s: %s", outputDirectory, err)
-	}
-	resolvedAddonRoot, err := filepath.EvalSymlinks(addonRoot)
-	if err != nil {
-		return "", installErrorf("resolving the addon subtree %s: %s", addonRoot, err)
-	}
-	if err := requireOutsideAddonSubtree(resolvedOutput, resolvedAddonRoot); err != nil {
+	// Checked again once the directory exists, this time by file identity rather
+	// than by comparing strings. The lexical check above catches the ordinary
+	// mistake before anything is created; this one catches every spelling that
+	// only reaches the addon subtree indirectly — through a symlinked ancestor,
+	// through a hard link, or through a case alias on a case-insensitive
+	// filesystem — none of which a string comparison can see.
+	if err := requireIdentityOutsideAddonSubtree(outputDirectory, addonRoot); err != nil {
 		return "", err
 	}
 	return outputDirectory, nil
@@ -680,6 +676,55 @@ func requireOutsideAddonSubtree(outputDirectory, addonRoot string) error {
 	return manifestErrorf(
 		"the output directory %s is inside the addon subtree %s; archives written there would be packaged into the next release",
 		outputDirectory, addonRoot,
+	)
+}
+
+// requireIdentityOutsideAddonSubtree refuses an output directory that is the
+// addon subtree, or that has it as an ancestor, comparing the directories
+// themselves rather than the paths that name them.
+//
+// It walks from the output directory up to the filesystem root, so a path whose
+// spelling differs from the addon root's — a different case, a symlinked
+// component, a hard-linked directory — is still recognized as being inside it.
+func requireIdentityOutsideAddonSubtree(outputDirectory, addonRoot string) error {
+	addonInfo, err := os.Stat(addonRoot)
+	if err != nil {
+		return installErrorf("reading the addon subtree %s: %s", addonRoot, err)
+	}
+	current := filepath.Clean(outputDirectory)
+	for {
+		info, err := os.Stat(current)
+		if err == nil && os.SameFile(info, addonInfo) {
+			return manifestErrorf(
+				"the output directory %s is inside the addon subtree %s; archives written there would be packaged into the next release",
+				outputDirectory, addonRoot,
+			)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return nil
+		}
+		current = parent
+	}
+}
+
+// requireInstallPath refuses an addon_path that is not where the addon installs.
+//
+// A slice archive holds the addon subtree unprefixed and a consumer extracts it
+// into addons/<name>, while every res:// value in the author's .gdextension is
+// written against where the subtree sits in their own project. Those are the
+// same directory only when addon_path is addons/<name>, and when they differ the
+// emitted index names paths no consumer can resolve — with nothing in the output
+// to say so. The spec describes only this layout, so it is required rather than
+// guessed at.
+func requireInstallPath(name, addonPath string) error {
+	expected := "addons/" + name
+	if addonPath == expected {
+		return nil
+	}
+	return fmt.Errorf(
+		"addon_path %q must be %q: a consumer installs the subtree at %s%s, and the %s values in the addon's own files are written against that path, so packaging from anywhere else would publish an index naming files no project has",
+		addonPath, expected, resourcePrefix, expected, extensionSuffix,
 	)
 }
 
