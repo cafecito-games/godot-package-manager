@@ -29,10 +29,14 @@ func (m *Manifest) Validate() error {
 	return nil
 }
 
-// validateAddonName rejects names that could escape the addons directory when
+// ValidateAddonName rejects names that could escape the addons directory when
 // used as a single path segment. It checks for empty strings, path separators,
 // the relative-traversal components "." and "..", and absolute paths.
-func validateAddonName(name string) error {
+//
+// It is exported because internal/packager validates an addon name too, and an
+// addon name is a manifest concept: one validator shared from here is what keeps
+// the producer and the consumer agreeing on which names are packageable.
+func ValidateAddonName(name string) error {
 	if name == "" {
 		return fmt.Errorf("addon name must not be empty")
 	}
@@ -180,11 +184,11 @@ func validateGitVersion(version string) error {
 
 // validateSpec checks one addon entry's required fields for its source type.
 func validateSpec(name string, addon AddonSpec) error {
-	if err := validateAddonName(name); err != nil {
+	if err := ValidateAddonName(name); err != nil {
 		return err
 	}
 	if addon.InstallAs != "" {
-		if err := validateAddonName(addon.InstallAs); err != nil {
+		if err := ValidateAddonName(addon.InstallAs); err != nil {
 			return fmt.Errorf("addon %q: invalid install_as: %w", name, err)
 		}
 	}

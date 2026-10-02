@@ -1,0 +1,21 @@
+[configuration]
+
+entry_symbol = "godot_jolt_main"
+compatibility_minimum = "4.2"
+
+[libraries]
+
+windows.editor.x86_64 = "bin/godot-jolt_windows_x64.dll"
+windows.template_debug.x86_64 = "bin/godot-jolt_windows_x64.dll"
+windows.template_release.x86_64 = "bin/godot-jolt_windows_x64.dll"
+macos.editor = "bin/godot-jolt_macos.framework"
+macos.template_debug = "bin/godot-jolt_macos.framework"
+macos.template_release = "bin/godot-jolt_macos.framework"
+linux.editor.x86_64 = "bin/godot-jolt_linux_x64.so"
+linux.template_debug.x86_64 = "bin/godot-jolt_linux_x64.so"
+linux.template_release.x86_64 = "bin/godot-jolt_linux_x64.so"
+android.template_debug.arm64 = "bin/godot-jolt_android_arm64.so"
+android.template_release.arm64 = "bin/godot-jolt_android_arm64.so"
+ios.template_debug.arm64 = "bin/godot-jolt_ios_arm64.dylib"
+ios.template_release.arm64 = "bin/godot-jolt_ios_arm64.dylib"
+macos.template_release.universal = "bin/godot-jolt_macos_universal.framework"
