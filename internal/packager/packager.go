@@ -130,7 +130,7 @@ func Package(options Options) (*Result, error) {
 		return nil, err
 	}
 
-	outputDirectory, err := prepareOutputDirectory(repositoryRoot, options.OutputDirectory)
+	outputDirectory, err := prepareOutputDirectory(repositoryRoot, options.OutputDirectory, addonRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -606,14 +606,26 @@ func resolveAddonRoot(repositoryRoot, addonPath string) (string, error) {
 //
 // A relative path is resolved against the repository root rather than the
 // working directory, so the default lands in the addon repository being
-// packaged. A directory that cannot be created is an *output.InstallError: the
-// config and the tree were fine and the filesystem was not.
-func prepareOutputDirectory(repositoryRoot, outputDirectory string) (string, error) {
+// packaged. A directory inside the addon subtree is refused, and a directory
+// that cannot be created is an *output.InstallError: the config and the tree
+// were fine and the filesystem was not.
+func prepareOutputDirectory(repositoryRoot, outputDirectory, addonRoot string) (string, error) {
 	if outputDirectory == "" {
 		outputDirectory = DefaultOutputDirectory
 	}
 	if !filepath.IsAbs(outputDirectory) {
 		outputDirectory = filepath.Join(repositoryRoot, outputDirectory)
+	}
+	outputDirectory = filepath.Clean(outputDirectory)
+	// Refused rather than allowed and warned about: archives written inside the
+	// addon subtree would be part of the subtree on the next run, so one release
+	// would carry the previous release's archives in its core slice, and the
+	// author would have no way to tell from the output that it happened.
+	if outputDirectory == addonRoot || strings.HasPrefix(outputDirectory, addonRoot+string(filepath.Separator)) {
+		return "", manifestErrorf(
+			"the output directory %s is inside the addon subtree %s; archives written there would be packaged into the next release",
+			outputDirectory, addonRoot,
+		)
 	}
 	if err := os.MkdirAll(outputDirectory, 0o755); err != nil {
 		return "", installErrorf("creating the output directory %s: %s", outputDirectory, err)

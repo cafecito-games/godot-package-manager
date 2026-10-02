@@ -451,3 +451,15 @@ ios.template_release.arm64 = { "bin/libsupport.a" : "" }
 		})
 	}
 }
+
+func TestPackageRefusesAnOutputDirectoryInsideTheAddonSubtree(t *testing.T) {
+	root := writeAddon(t, validConfig, minimalFiles())
+
+	_, err := packager.Package(packager.Options{
+		Directory:       root,
+		OutputDirectory: filepath.Join(root, "addons", "addon", "dist"),
+	})
+	require.Error(t, err)
+	require.Equal(t, output.ExitManifest, output.CodeFor(err))
+	require.Contains(t, err.Error(), "inside the addon subtree")
+}
