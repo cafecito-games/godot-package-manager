@@ -63,6 +63,39 @@ locked installs.
 If the archive host requires credentials, include them in the URL format the
 host supports. `gpm` does not manage an archive credential store.
 
+## Which Sources Can Be Sliced
+
+An addon published as [platform slices](slices.md) is fetched from a
+`gpm-index.toml` that names one archive per slice, so only the slices the project
+needs are downloaded.
+
+| Source | Sliced when |
+| --- | --- |
+| `github-release` | The release publishes a `gpm-index.toml` asset. Discovered automatically. |
+| `archive` | The manifest sets `index` to the index URL. |
+| `git` | Never. |
+
+`git` sources are never sliced: slices are a property of published release
+artifacts rather than of a source checkout. `index` is rejected for any source
+other than `archive`, because a `github-release` source discovers its index from
+the release's asset list and a second declaration would conflict with it.
+
+```toml
+[addons.limboai]
+source = "archive"
+url = "https://example.com/limboai-1.4.0-core.zip"
+version = "1.4.0"
+index = "https://example.com/gpm-index.toml"
+```
+
+Slice archives are resolved by joining each `file` name from the index to the
+directory the index itself was downloaded from. For a sliced archive source,
+`url` is still required by the manifest but is not what `gpm` downloads, and
+`--verbose` says so. For a sliced release, `asset` is likewise ignored.
+
+`checksum` is not valid for a sliced addon: there is no single archive to pin.
+The index is pinned by `index_sha256` in `addons.lock` instead.
+
 ## Godot AssetLib
 
 `gpm assetlib add` searches or fetches an asset from Godot AssetLib, resolves

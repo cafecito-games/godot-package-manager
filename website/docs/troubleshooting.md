@@ -97,6 +97,163 @@ gpm update dialogue_manager
 gpm remove dialogue_manager
 ```
 
+## No Slice Is Published For A Declared Platform
+
+The project declares a platform in `addons.toml` that the addon does not publish
+a [slice](slices.md) for:
+
+```text
+gpm: the addon publishes no slice for declared platform "web.wasm32"; published slices are core, android.arm64, ios.arm64, linux.x86_64, macos, windows.x86_64
+```
+
+Exit code 4. The message lists the slices the addon does publish; remove the
+platform from `[project] platforms` or declare a per-addon `platforms` list for
+the addon that does not support it. The failure is identical under `--host-only`
+and `--all-platforms`, because a selection mode changes what is installed and not
+whether the manifest is valid.
+
+An invalid platform tag, or a manifest declaring `core`, is a different failure
+and is exit code 3:
+
+```text
+gpm: [project]: invalid platforms entry: invalid platform tag "MacOS": unknown platform "MacOS"; known platforms are android, ios, linux, macos, web, windows
+gpm: [project]: invalid platforms entry: platform "core" is implicit and may not be declared; every project receives the core slice
+```
+
+## A Slice Archive Checksum Does Not Match
+
+A slice archive's bytes do not match the SHA-256 that `addons.lock` pins for it:
+
+```text
+gpm: addon "limboai": slice "macos" checksum mismatch (lock: 0000000a..., fetched: 2a3441a0...)
+```
+
+Exit code 4, and nothing is installed. Either the publisher republished the
+release under the same tag, or the lock entry was edited. Confirm the new
+artifacts are the ones you want, then run `gpm update <name>` to re-resolve the
+pins and review the `addons.lock` diff.
+
+An `index_sha256` mismatch, a published slice set that gained or lost a slice,
+and a release that stopped publishing a `gpm-index.toml` altogether all report in
+the same way and have the same remedy.
+
+## Two Slices Ship The Same Path
+
+Two of an addon's slice archives both carry one path, so the merged tree would
+have to take it from both:
+
+```text
+gpm: slices "core" and "linux" both ship "shared.txt"; one path in the merged tree cannot come from two slices
+```
+
+Exit code 4. This is a packaging mistake on the publisher's side and cannot be
+worked around in the project; report it to the addon's author. The comparison is
+case-insensitive, so two differently-cased paths are also reported — on a
+case-insensitive filesystem they are one file.
+
+## The Index Format Is Newer Than This gpm
+
+```text
+gpm: unsupported index format 2: this gpm understands index format 1 at most, so upgrade gpm to install this addon
+```
+
+Exit code 4. The index is rejected before any other key is read, because a newer
+format may give an existing key a new meaning. Upgrade `gpm`, or pin the addon to
+a version whose index this `gpm` understands.
+
+## An Addon Does Not Load In The Editor
+
+The editor reports that a GDExtension library is missing on this machine, and the
+installed `.gdextension` lists no entry for the host's platform. The addon
+publishes no [slice](slices.md) for this host, which is the author's statement
+about what the addon supports rather than a project error. `gpm install
+--verbose` says so:
+
+```text
+addon "b" publishes no slice for this host (darwin/arm64); published slices are core, linux
+```
+
+The addon's GDScript still installs, and exit code 0 is correct. A pure-GDScript
+addon publishes `core` alone and needs nothing else.
+
+## A Platform's Binaries Are Missing From A Checkout
+
+An export, or a build for a platform other than the host's, cannot find a library
+that `addons.lock` pins. The checkout was most likely populated with
+[`--host-only`](slices.md#selection-modes) or with `GPM_HOST_ONLY` set, which
+installs `core` and the host's slice only.
+
+Check what is actually on disk and whether the variable is set:
+
+```bash
+gpm list
+echo "$GPM_HOST_ONLY"
+```
+
+`gpm list` prints the installed slice IDs after each addon's version. A host-only
+checkout shows `core` and one platform. The repository is not broken:
+`addons.lock` is byte-identical under host-only, so nothing was committed
+differently. Restore the declared platforms with a plain install:
+
+```bash
+unset GPM_HOST_ONLY
+gpm install
+```
+
+Nothing has to be deleted first; `gpm install` recomputes the needed slice set
+every run and re-materializes the addon.
+
+A `GPM_HOST_ONLY` value that is not a boolean is a usage error, exit code 2:
+
+```text
+gpm: GPM_HOST_ONLY="yes" is not a boolean; use one of true, false, 1 or 0
+```
+
+So is passing both selection flags:
+
+```text
+gpm: --all-platforms and --host-only contradict each other; pass whichever one of the two sets you want installed
+```
+
+## .gpm-state.toml Could Not Be Parsed
+
+```text
+ignoring unparseable state file /path/to/game/.gpm-state.toml: toml: line 1: expected '.' or '=', but got 't' instead
+```
+
+The file is reported and treated as empty, and the run continues: every addon is
+then re-materialized, which costs a download and nothing else. It is never fatal
+and never produces an unverified install, because `addons.lock` is the only
+verification authority. The message is printed through diagnostics, so pass
+`--verbose` to see it.
+
+A state file that exists but cannot be *read* is different — an environment fault
+rather than a cache miss — and fails with exit code 3.
+
+## A File Deleted From Inside An Addon Is Not Restored
+
+`gpm install` reconciles whether an addon's install directory exists and which
+slices this machine materialized. It does not compare the directory's contents
+against the archives, so a single file deleted from inside an otherwise-installed
+addon is not noticed and not restored:
+
+```bash
+rm addons/limboai/plugin.gd
+gpm install        # succeeds, and plugin.gd is still missing
+```
+
+Remove the whole addon directory and install again:
+
+```bash
+rm -rf addons/limboai
+gpm install
+```
+
+Changing the selection mode *is* reconciled, in both directions: widening to
+`--all-platforms` fetches the newly needed slices, and narrowing to `--host-only`
+re-materializes the addon without the others. Only a change inside an addon
+directory that `gpm` still considers complete goes unnoticed.
+
 ## Git Is Not Found
 
 Git sources require `git` on `PATH`. Verify:

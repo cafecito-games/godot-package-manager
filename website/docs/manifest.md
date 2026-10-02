@@ -64,6 +64,49 @@ version = "1.6.0"
 Use `source_path` or `install_as` with `gpm assetlib add` when the downloaded
 archive layout needs the same disambiguation as any other archive source.
 
+## Platform Declarations
+
+The optional `[project]` table declares the Godot platforms the project targets.
+It applies to every addon that does not declare its own list:
+
+```toml
+[project]
+platforms = ["windows.x86_64", "linux.x86_64"]
+```
+
+An addon may declare its own list, which **replaces** the project list for that
+addon rather than merging with it:
+
+```toml
+[addons.limboai]
+source = "archive"
+url = "https://example.com/limboai-1.4.0-core.zip"
+version = "1.4.0"
+index = "https://example.com/gpm-index.toml"
+platforms = ["ios.arm64"]
+```
+
+Replacement is deliberate: an addon that declares its own platforms is
+unaffected by later additions to `[project] platforms`. An inherited list is
+never written into the addon table, so `gpm add`, `gpm remove`, and the AssetLib
+wizard all preserve inheritance instead of freezing the resolved list into a
+per-addon override.
+
+`platforms` absent and `platforms = []` are equivalent. The `core` slice and the
+slice for the machine running `gpm` are always installed and may not be declared
+here.
+
+`index` marks an `archive` source as sliced and is the absolute URL of the
+addon's `gpm-index.toml`. It is not valid for any other source type: a
+`github-release` source discovers its index from the release assets, and a `git`
+source is never sliced.
+
+Platform tags, the full list of known platforms and architectures, and what
+`gpm` installs for each are covered in [Platform slices](slices.md).
+
+Unknown keys inside `[project]` are rejected. A stray key elsewhere in
+`addons.toml` is silently ignored.
+
 ## Field Reference
 
 | Field | Applies to | Required | Notes |
@@ -76,7 +119,15 @@ archive layout needs the same disambiguation as any other archive source.
 | `source_path` | all | no | Subdirectory inside the fetched tree to install. |
 | `install_as` | all | no | Directory name under `addons/`; defaults to the table key. |
 | `exclude` | all | no | Directories under the selected install root to skip. |
-| `checksum` | `github-release`, `archive` | no | Expected SHA-256 of the downloaded archive or release asset. |
+| `checksum` | `github-release`, `archive` | no | Expected SHA-256 of the downloaded archive or release asset. Not valid for a sliced addon. |
+| `platforms` | all | no | Declared platform tags for this addon. Replaces `[project] platforms`. See [Platform slices](slices.md). |
+| `index` | `archive` | no | URL of the addon's `gpm-index.toml`, marking the archive as sliced. |
+
+The `[project]` table carries one key:
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `platforms` | no | Declared platform tags for every addon that does not declare its own. |
 
 ## source_path Auto-Detection
 
@@ -114,3 +165,7 @@ auto-detection. Missing exclusion directories are ignored.
   escape the install root with `..`.
 - `checksum` must be a 64-character lowercase SHA-256 digest and is not valid
   for Git sources.
+- Every `platforms` entry must be a known platform tag, and `core` may not be
+  declared. The `[project]` list is checked on its own, so a typo is reported
+  even in a manifest that declares no addons yet.
+- `index` is valid only for `archive` sources and must be an HTTP(S) URL.

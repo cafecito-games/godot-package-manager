@@ -8,7 +8,7 @@ const sidebars = {
     {
       type: 'category',
       label: 'Usage',
-      items: ['manifest', 'commands', 'sources', 'lockfile'],
+      items: ['manifest', 'commands', 'sources', 'slices', 'lockfile'],
     },
     {
       type: 'category',

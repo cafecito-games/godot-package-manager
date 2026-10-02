@@ -143,6 +143,18 @@ When a lock entry is consistent with the manifest, `gpm install` honors the
 existing pin. If an addon is new or its manifest entry changed, that addon is
 re-resolved and the lockfile is updated.
 
+Install flags:
+
+| Flag | Notes |
+| --- | --- |
+| `--dir` | Start directory for project discovery. |
+| `--all-platforms` | Install every slice an addon publishes, for projects that vendor `addons/` into git. |
+| `--host-only` | Install only this machine's slices, ignoring the project's declared platforms. Also settable with `GPM_HOST_ONLY`. |
+
+`--all-platforms` and `--host-only` select which [platform
+slices](slices.md#selection-modes) are materialized. They contradict each other,
+so passing both is a usage error. Neither affects `addons.lock`.
+
 ## gpm update
 
 Re-resolve addons and rewrite lock pins:
@@ -155,6 +167,18 @@ gpm update dialogue_manager some_plugin
 
 With no names, every addon is updated. With names, only those addons are
 updated.
+
+Update flags:
+
+| Flag | Notes |
+| --- | --- |
+| `--dir` | Start directory for project discovery. |
+| `--all-platforms` | Install every slice an addon publishes, for projects that vendor `addons/` into git. |
+| `--host-only` | Install only this machine's slices, ignoring the project's declared platforms. Also settable with `GPM_HOST_ONLY`. |
+
+These are the same selection flags `gpm install` takes; see [Platform
+slices](slices.md#selection-modes) for what each one selects and for
+`GPM_HOST_ONLY`.
 
 ## gpm remove
 
@@ -174,6 +198,27 @@ List configured addons and whether their install directory exists:
 ```bash
 gpm list
 ```
+
+## gpm package
+
+Partition an addon repository into [platform slice](slices.md) archives and an
+index. Unlike every other subcommand, `gpm package` runs in an addon author's
+own repository, which holds `gpm-package.toml` and no `project.godot`:
+
+```bash
+gpm package
+gpm package --dir path/to/addon-repo --out dist --version 1.4.1
+```
+
+| Flag | Notes |
+| --- | --- |
+| `--dir` | Addon repository directory holding `gpm-package.toml`. Defaults to the current directory. |
+| `--out` | Directory to write slice archives and `gpm-index.toml` into. Defaults to `dist`, relative to the repository. |
+| `--version` | Version to package, overriding `[package] version`. |
+
+Publishing the resulting artifacts remains the author's job. See [Platform
+slices](slices.md#publishing-a-sliced-addon) for the `gpm-package.toml` schema
+and a walkthrough.
 
 ## Shell Completion
 
@@ -195,4 +240,7 @@ gpm completion powershell
 | `--quiet` | `-q` | Suppress non-error output. |
 
 `--json` is supported by `add`, `assetlib search`, `assetlib add`, `install`,
-`update`, and `list`.
+`update`, `list`, and `package`.
+
+`--all-platforms` and `--host-only` are not global: they are per-command flags on
+`gpm install` and `gpm update`.
