@@ -117,7 +117,11 @@ func Package(options Options) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	plan := newFanOutPlan(sortedSliceIDs(partitioned))
+	declared, err := declaredSliceIDs(config.Package.Slices)
+	if err != nil {
+		return nil, err
+	}
+	plan := newFanOutPlan(sortedSliceIDs(partitioned), declared)
 	published, err := plan.applyTo(partitioned)
 	if err != nil {
 		return nil, err
@@ -127,7 +131,7 @@ func Package(options Options) (*Result, error) {
 	if err := claimEntryFiles(claims, tree, partitioned, plan, resourceRoot); err != nil {
 		return nil, err
 	}
-	extras, err := claimExtras(claims, tree, config.Package.Slices, plan)
+	extras, err := claimExtras(claims, tree, config.Package.Slices, declared, plan)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +201,13 @@ func Package(options Options) (*Result, error) {
 	// been hashed, so an interrupted run never leaves an index pinning an archive
 	// that is not there.
 	if err := index.Save(result.Index); err != nil {
-		return nil, err
+		// Reported by message inside an install error: Save wraps every
+		// filesystem failure — the temp file, the write, the sync, the rename — in
+		// an *output.ManifestError, and output.CodeFor resolves that type first, so
+		// wrapping it with %w would report a disk failure in --out as a config
+		// mistake. Writing the index into --out is a filesystem failure like any
+		// other write this command performs.
+		return nil, installErrorf("writing %s: %s", IndexFileName, err)
 	}
 	if err := verifyEmittedIndex(result.Index); err != nil {
 		return nil, err
@@ -368,24 +378,20 @@ func claimExtras(
 	claims *claimSet,
 	tree *addonTree,
 	extras map[string][]string,
+	declared []slice.SliceID,
 	plan fanOutPlan,
 ) (map[slice.SliceID]struct{}, error) {
-	declared := map[slice.SliceID]struct{}{}
-	for _, tag := range sortedKeys(extras) {
-		// Already validated while loading the config, so the parse cannot fail
-		// here; the ID is re-derived rather than carried so that the config keeps
-		// exactly one representation.
-		id, err := slice.ParseDeclaredPlatform(tag)
-		if err != nil {
-			return nil, manifestErrorf("invalid [package.slices] key %q: %s", tag, err)
-		}
+	claimed := map[slice.SliceID]struct{}{}
+	tags := sortedKeys(extras)
+	for position, tag := range tags {
+		id := declared[position]
 		if plan.suppresses(id) {
 			return nil, manifestErrorf(
 				"[package.slices] names slice %q, which is not published: %q declares both architecture-less and architecture-specific entries, so its entries ship in %s instead; name those slices",
 				id, id.Platform, describeSliceIDs(plan.targetsOf(id)),
 			)
 		}
-		declared[id] = struct{}{}
+		claimed[id] = struct{}{}
 		for _, pattern := range extras[tag] {
 			matched, err := matchExtras(tree, id, pattern)
 			if err != nil {
@@ -397,7 +403,27 @@ func claimExtras(
 			}
 		}
 	}
-	return declared, nil
+	return claimed, nil
+}
+
+// declaredSliceIDs parses the [package.slices] keys into slice IDs, in the same
+// ascending key order claimExtras walks them in, so the two cannot disagree
+// about which ID a key is.
+//
+// The keys were already validated while the config was loaded, so a parse
+// failure here is unreachable; it is reported rather than ignored because the
+// alternative is carrying an unparsed tag into the fan-out.
+func declaredSliceIDs(extras map[string][]string) ([]slice.SliceID, error) {
+	tags := sortedKeys(extras)
+	ids := make([]slice.SliceID, 0, len(tags))
+	for _, tag := range tags {
+		id, err := slice.ParseDeclaredPlatform(tag)
+		if err != nil {
+			return nil, manifestErrorf("invalid [package.slices] key %q: %s", tag, err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 // matchExtras returns the files one extras pattern names.

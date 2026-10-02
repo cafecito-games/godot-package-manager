@@ -547,3 +547,20 @@ func TestPackageRefusesAnOutputDirectoryReachingTheAddonSubtreeByCaseAlias(t *te
 	require.Equal(t, output.ExitManifest, output.CodeFor(err))
 	require.Contains(t, err.Error(), "inside the addon subtree")
 }
+
+func TestPackageReportsAFailureWritingTheIndexAsAFilesystemFailure(t *testing.T) {
+	root := writeAddon(t, validConfig, minimalFiles())
+	outputDirectory := t.TempDir()
+	// A non-empty directory where the index file belongs, so the index cannot be
+	// written there. That is a filesystem failure rather than a config problem,
+	// even though the helpers underneath carry a manifest error of their own.
+	occupied := filepath.Join(outputDirectory, packager.IndexFileName)
+	require.NoError(t, os.Mkdir(occupied, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(occupied, "blocker"), []byte("x"), 0o644))
+
+	_, err := packager.Package(packager.Options{Directory: root, OutputDirectory: outputDirectory})
+	require.Error(t, err)
+	require.Equal(t, output.ExitInstall, output.CodeFor(err))
+	var installError *output.InstallError
+	require.ErrorAs(t, err, &installError)
+}

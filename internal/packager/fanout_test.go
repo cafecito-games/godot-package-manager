@@ -13,7 +13,7 @@ func sliceID(platform, architecture string) slice.SliceID {
 }
 
 func TestFanOutPlanPublishesAGenericOnlyPlatformUnchanged(t *testing.T) {
-	plan := newFanOutPlan([]slice.SliceID{sliceID("macos", ""), sliceID("linux", "x86_64")})
+	plan := newFanOutPlan([]slice.SliceID{sliceID("macos", ""), sliceID("linux", "x86_64")}, nil)
 
 	require.False(t, plan.suppresses(sliceID("macos", "")))
 	require.Equal(t, []slice.SliceID{sliceID("macos", "")}, plan.targetsOf(sliceID("macos", "")))
@@ -26,7 +26,7 @@ func TestFanOutPlanSuppressesTheGenericSliceOfAMixedGranularityPlatform(t *testi
 		sliceID("macos", "universal"),
 		sliceID("macos", "arm64"),
 		sliceID("windows", "x86_64"),
-	})
+	}, nil)
 
 	require.True(t, plan.suppresses(sliceID("macos", "")))
 	require.Equal(t,
@@ -38,7 +38,7 @@ func TestFanOutPlanSuppressesTheGenericSliceOfAMixedGranularityPlatform(t *testi
 }
 
 func TestFanOutPlanLeavesAnArchitectureOnlyPlatformAlone(t *testing.T) {
-	plan := newFanOutPlan([]slice.SliceID{sliceID("ios", "arm64"), sliceID("ios", "arm32")})
+	plan := newFanOutPlan([]slice.SliceID{sliceID("ios", "arm64"), sliceID("ios", "arm32")}, nil)
 
 	require.False(t, plan.suppresses(sliceID("ios", "arm64")))
 	require.Equal(t, []slice.SliceID{sliceID("ios", "arm64")}, plan.targetsOf(sliceID("ios", "arm64")))
@@ -49,7 +49,7 @@ func TestFanOutPlanReportsTheSuppressedPlatformsInOrder(t *testing.T) {
 	plan := newFanOutPlan([]slice.SliceID{
 		sliceID("macos", ""), sliceID("macos", "universal"),
 		sliceID("ios", ""), sliceID("ios", "arm64"),
-	})
+	}, nil)
 
 	require.Equal(t, []slice.SliceID{sliceID("ios", ""), sliceID("macos", "")}, plan.suppressedPlatforms())
 }
@@ -67,7 +67,7 @@ func TestFanOutMergesGenericEntriesIntoEveryArchitectureSlice(t *testing.T) {
 			}},
 		},
 	}
-	plan := newFanOutPlan([]slice.SliceID{sliceID("macos", ""), sliceID("macos", "universal")})
+	plan := newFanOutPlan([]slice.SliceID{sliceID("macos", ""), sliceID("macos", "universal")}, nil)
 
 	published, err := plan.applyTo(partitioned)
 	require.NoError(t, err)
@@ -79,4 +79,27 @@ func TestFanOutMergesGenericEntriesIntoEveryArchitectureSlice(t *testing.T) {
 		},
 		published[sliceID("macos", "universal")]["jolt.gdextension"].Libraries,
 	)
+}
+
+func TestFanOutPlanWidensItsTargetsToADeclaredArchitecture(t *testing.T) {
+	plan := newFanOutPlan(
+		[]slice.SliceID{sliceID("macos", ""), sliceID("macos", "universal")},
+		[]slice.SliceID{sliceID("macos", "arm64"), sliceID("android", "arm64")},
+	)
+
+	require.True(t, plan.suppresses(sliceID("macos", "")))
+	require.Equal(t,
+		[]slice.SliceID{sliceID("macos", "arm64"), sliceID("macos", "universal")},
+		plan.targetsOf(sliceID("macos", "")),
+	)
+}
+
+func TestFanOutPlanDoesNotFanOutAPlatformWhoseExtensionNamesNoArchitecture(t *testing.T) {
+	plan := newFanOutPlan(
+		[]slice.SliceID{sliceID("macos", "")},
+		[]slice.SliceID{sliceID("macos", "arm64")},
+	)
+
+	require.False(t, plan.suppresses(sliceID("macos", "")))
+	require.Equal(t, []slice.SliceID{sliceID("macos", "")}, plan.targetsOf(sliceID("macos", "")))
 }

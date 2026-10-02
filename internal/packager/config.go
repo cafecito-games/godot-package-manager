@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -85,10 +86,30 @@ func LoadConfig(path string) (*Config, error) {
 	return config, nil
 }
 
+// topLevelConfigKeys is the exact spelling of every key the config declares at
+// the top level.
+var topLevelConfigKeys = []string{"package"}
+
+// packageFieldNames is the exact spelling of every key the [package] table
+// declares.
+var packageFieldNames = []string{"name", "addon_path", "version", "slices"}
+
 // rejectUnknownConfigKeys fails on any key the schema does not declare. The
 // smallest undecoded key is reported, so a config with several unknown keys
 // always produces the same message.
 func rejectUnknownConfigKeys(path string, metaData toml.MetaData) error {
+	// The TOML library matches a struct field case-insensitively when no exact
+	// match exists, and records the document's own spelling as decoded. TOML keys
+	// are case-sensitive, so a key differing only in case is an unknown key that
+	// strict decoding alone lets through, which is why the index loader checks
+	// the document's spellings as well as its undecoded keys. This config is
+	// decoded strictly in both directions for the same reason.
+	for _, key := range metaData.Keys() {
+		if err := rejectMisspelledConfigKey(path, key); err != nil {
+			return err
+		}
+	}
+
 	undecoded := metaData.Undecoded()
 	if len(undecoded) == 0 {
 		return nil
@@ -100,6 +121,32 @@ func rejectUnknownConfigKeys(path string, metaData toml.MetaData) error {
 		}
 	}
 	return manifestErrorf("%s declares unknown key %q", path, smallest)
+}
+
+// rejectMisspelledConfigKey checks one document key against the schema at the
+// position it appears in. The one position the schema leaves open is a
+// [package.slices] key, which is a slice ID validated later as a value.
+func rejectMisspelledConfigKey(path string, key toml.Key) error {
+	switch {
+	case len(key) == 0:
+		return nil
+	case !slices.Contains(topLevelConfigKeys, key[0]):
+		return manifestErrorf("%s declares unknown key %q", path, key.String())
+	case len(key) == 1:
+		return nil
+	case key[1] == "slices":
+		// Below [package.slices] every key is a slice ID, and only its own table
+		// of patterns sits under it, which carries no keys at all.
+		if len(key) > 3 {
+			return manifestErrorf("%s declares unknown key %q", path, key.String())
+		}
+		return nil
+	case !slices.Contains(packageFieldNames, key[1]):
+		return manifestErrorf("%s declares unknown key %q", path, key.String())
+	case len(key) > 2:
+		return manifestErrorf("%s declares unknown key %q", path, key.String())
+	}
+	return nil
 }
 
 // validate applies every rule that needs nothing from disk.

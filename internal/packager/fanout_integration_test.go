@@ -323,3 +323,84 @@ func joinKeys(keys []string) string {
 	}
 	return joined
 }
+
+func TestPackagerFanOutReachesAnExtrasDeclaredArchitectureOfAFannedOutPlatform(t *testing.T) {
+	// The .gdextension fans macos out, and [package.slices] ships an additional
+	// macOS architecture the .gdextension never names. A darwin/arm64 host
+	// resolves macos.arm64 before macos.universal, so that slice has to carry the
+	// platform's generic entries too or the host installs an addon with no macOS
+	// library at all.
+	extension := `[configuration]
+
+entry_symbol = "addon_main"
+
+[libraries]
+
+macos.editor = "bin/addon_macos.dylib"
+macos.template_release = "bin/addon_macos.dylib"
+macos.template_release.universal = "bin/addon_macos_universal.dylib"
+`
+	root := writeAddon(t, `
+[package]
+name       = "addon"
+addon_path = "addons/addon"
+version    = "1.0.0"
+
+[package.slices]
+"macos.arm64" = ["macos/arm64/extra.dylib"]
+`, map[string]string{
+		"addons/addon/addon.gdextension":               extension,
+		"addons/addon/plugin.gd":                       "extends Node\n",
+		"addons/addon/bin/addon_macos.dylib":           "generic",
+		"addons/addon/bin/addon_macos_universal.dylib": "universal",
+		"addons/addon/macos/arm64/extra.dylib":         "extra",
+	})
+
+	result, err := packager.Package(packager.Options{Directory: root})
+	require.NoError(t, err)
+	index := loadEmittedIndex(t, result.Index)
+	require.Equal(t, []string{"core", "macos.arm64", "macos.universal"}, sliceIDs(index))
+
+	for _, key := range []string{"macos.arm64", "macos.universal"} {
+		keys := entryKeys(index.Slices[key].Libraries["addon.gdextension"])
+		require.Contains(t, keys, "macos.editor", "slice %s loses the platform's generic entries", key)
+		require.Contains(t, keys, "macos.template_release", "slice %s loses the platform's generic entries", key)
+	}
+	require.Equal(t, []string{"bin/addon_macos.dylib", "macos/arm64/extra.dylib"},
+		archiveEntries(t, filepath.Join(filepath.Dir(result.Index), "addon-1.0.0-macos.arm64.zip")))
+}
+
+func TestPackagerStillRefusesAGenericPlatformBesideAnExtrasOnlyArchitecture(t *testing.T) {
+	// Here the .gdextension names no macOS architecture at all, so nothing says
+	// which architectures the generic binaries are for. Fanning out would publish
+	// macos.arm64 alone and silently drop every other macOS host, so the config
+	// is reported instead.
+	extension := `[configuration]
+
+entry_symbol = "addon_main"
+
+[libraries]
+
+macos.editor = "bin/addon_macos.dylib"
+`
+	root := writeAddon(t, `
+[package]
+name       = "addon"
+addon_path = "addons/addon"
+version    = "1.0.0"
+
+[package.slices]
+"macos.arm64" = ["macos/arm64/extra.dylib"]
+`, map[string]string{
+		"addons/addon/addon.gdextension":       extension,
+		"addons/addon/plugin.gd":               "extends Node\n",
+		"addons/addon/bin/addon_macos.dylib":   "generic",
+		"addons/addon/macos/arm64/extra.dylib": "extra",
+	})
+
+	_, err := packager.Package(packager.Options{Directory: root})
+	require.Error(t, err)
+	var manifestError *output.ManifestError
+	require.ErrorAs(t, err, &manifestError)
+	require.Contains(t, err.Error(), `"macos.arm64"`)
+}

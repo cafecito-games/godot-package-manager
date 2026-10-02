@@ -1,6 +1,7 @@
 package packager
 
 import (
+	"slices"
 	"sort"
 
 	"github.com/cafecito-games/godot-package-manager/internal/slice"
@@ -45,11 +46,23 @@ type fanOutPlan struct {
 	replacements map[slice.SliceID][]slice.SliceID
 }
 
-// newFanOutPlan derives the plan from the slice IDs an addon's .gdextension files
-// partitioned into. The platform and architecture of each ID come from
-// ReduceLibraryKey by way of PartitionExtension, so no platform tag is re-parsed
-// here.
-func newFanOutPlan(partitioned []slice.SliceID) fanOutPlan {
+// newFanOutPlan derives the plan from the slice IDs an addon publishes.
+//
+// partitioned are the slice IDs the addon's .gdextension files partitioned into,
+// whose platform and architecture come from ReduceLibraryKey by way of
+// PartitionExtension, so no platform tag is re-parsed here. declared are the
+// slice IDs [package.slices] names.
+//
+// Whether a platform fans out is decided by its partitioned entries alone: only
+// a .gdextension that writes both an architecture-less and an
+// architecture-specific key for one platform says that the platform's generic
+// entries belong to the architectures beside them. But once a platform does fan
+// out, every architecture slice the addon publishes for it is a target,
+// including one that exists only because [package.slices] ships extras for it.
+// A host picks the first published slice of its platform, so an architecture
+// slice left out of the fan-out would be installed instead of a complete one and
+// would carry no library at all.
+func newFanOutPlan(partitioned, declared []slice.SliceID) fanOutPlan {
 	architectures := map[string][]slice.SliceID{}
 	generic := map[string]bool{}
 	for _, id := range partitioned {
@@ -61,6 +74,19 @@ func newFanOutPlan(partitioned []slice.SliceID) fanOutPlan {
 			continue
 		}
 		architectures[id.Platform] = append(architectures[id.Platform], id)
+	}
+	// Declared slices widen the target set but never create a fan-out: a platform
+	// whose .gdextension names no architecture is left to
+	// rejectGenericSliceBesideItsArchitectures, because nothing says which
+	// architectures its generic binaries are for and inventing an answer would
+	// drop every other host of that platform.
+	for _, id := range declared {
+		if id.Architecture == "" || !generic[id.Platform] || len(architectures[id.Platform]) == 0 {
+			continue
+		}
+		if !slices.Contains(architectures[id.Platform], id) {
+			architectures[id.Platform] = append(architectures[id.Platform], id)
+		}
 	}
 
 	plan := fanOutPlan{replacements: map[slice.SliceID][]slice.SliceID{}}
