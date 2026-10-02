@@ -22,6 +22,7 @@ gpm --json assetlib search dialogue --godot-version 4.2
 - `install`
 - `update`
 - `list`
+- `package`
 
 ## Add, Install, And Update
 
@@ -37,6 +38,28 @@ Successful install operations emit one result per installed addon:
 ]
 ```
 
+For an addon published as [platform slices](slices.md), each result also carries
+a `slices` array:
+
+```json
+[
+  {
+    "name": "limboai",
+    "resolved_version": "1.4.0",
+    "install_path": "limboai",
+    "slices": [
+      "core",
+      "macos"
+    ]
+  }
+]
+```
+
+`slices` reports what is **on disk**, not what the addon publishes and not what
+the project declares. Under `--host-only` it lists `core` plus the host's slice;
+under `--all-platforms` it lists every published slice. The field is omitted for
+an unsliced addon.
+
 ## List
 
 `gpm --json list` reports manifest entries and local install state:
@@ -50,6 +73,53 @@ Successful install operations emit one result per installed addon:
     "installed": true
   }
 ]
+```
+
+A sliced addon carries the same `slices` array, read from `.gpm-state.toml`, so
+it too reports what this machine materialized rather than the published or
+declared set:
+
+```json
+[
+  {
+    "name": "limboai",
+    "source": "archive",
+    "version": "1.4.0",
+    "installed": true,
+    "slices": [
+      "core",
+      "linux.x86_64",
+      "macos",
+      "windows.x86_64"
+    ]
+  }
+]
+```
+
+## Package
+
+`gpm --json package` reports the slices one packaging run published:
+
+```json
+{
+  "name": "limboai",
+  "version": "1.4.0",
+  "index": "/path/to/addon-repo/dist/gpm-index.toml",
+  "slices": [
+    {
+      "id": "core",
+      "file": "limboai-1.4.0-core.zip",
+      "size": 410,
+      "sha256": "e8de5ee7b224e7aa447885ec3c248f04151e111f5bd9f78bdbfc85aa25fbb8c4"
+    },
+    {
+      "id": "macos",
+      "file": "limboai-1.4.0-macos.zip",
+      "size": 194,
+      "sha256": "2a3441a0f24f45b89d7ee14a7b4ddf4458bbbdf715e652155f8b6695b1d70514"
+    }
+  ]
+}
 ```
 
 ## AssetLib Search

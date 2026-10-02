@@ -13,6 +13,10 @@ declared in `addons.toml` into your project's `addons/` directory and writes an
 
 Full documentation: <https://cafecito-games.github.io/godot-package-manager/>
 
+Addons published as platform slices are downloaded one platform at a time; see
+[Platform slices](https://cafecito-games.github.io/godot-package-manager/docs/slices)
+for publishing one with `gpm package` and for consuming one in a project.
+
 ## Install
 
 macOS:
