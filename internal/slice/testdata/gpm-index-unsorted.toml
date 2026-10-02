@@ -1,0 +1,30 @@
+format  = 1
+name    = "limboai"
+version = "1.4.0"
+
+[slices."ios.arm64"]
+file   = "limboai-1.4.0-ios.arm64.zip"
+sha256 = "fe7ee35a4e429b6f0e0e07931a046f52b91e1530689ed6ad46fa83239d166711"
+size   = 4821001
+
+  [slices."ios.arm64".libraries."nested/second.gdextension"]
+  "ios.template_release.arm64" = "res://addons/limboai/nested/bin/second.ios.arm64.a"
+  "ios.template_debug.arm64"   = "res://addons/limboai/nested/bin/second.ios.arm64.debug.a"
+
+  [slices."ios.arm64".libraries."limboai.gdextension"]
+  "ios.template_release" = "res://addons/limboai/bin/liblimboai.ios.template_release.xcframework"
+  "ios.template_debug"   = "res://addons/limboai/bin/liblimboai.ios.template_debug.xcframework"
+
+  [slices."ios.arm64".dependencies."nested/second.gdextension"]
+  "ios.template_release.arm64" = "res://addons/limboai/nested/bin/dep.framework"
+  "ios.template_debug.arm64"   = "res://addons/limboai/nested/bin/dep.debug.framework"
+
+[slices.core]
+file   = "limboai-1.4.0-core.zip"
+sha256 = "2bbed7f0a0218278217edd81a4a4d10f91362aa0c46f80f5931423947004e853"
+size   = 182344
+
+[slices."android.arm64"]
+file   = "limboai-1.4.0-android.arm64.zip"
+sha256 = "22c7dc1b78c15919ef85b4f0a008bc2d0d3d22f43e0ccfd851dadb80ff844a9f"
+size   = 991233

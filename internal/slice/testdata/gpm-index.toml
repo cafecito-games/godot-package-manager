@@ -1,0 +1,21 @@
+format  = 1
+name    = "limboai"
+version = "1.4.0"
+
+[slices.core]
+file   = "limboai-1.4.0-core.zip"
+sha256 = "2bbed7f0a0218278217edd81a4a4d10f91362aa0c46f80f5931423947004e853"
+size   = 182344
+
+[slices."ios.arm64"]
+file   = "limboai-1.4.0-ios.arm64.zip"
+sha256 = "fe7ee35a4e429b6f0e0e07931a046f52b91e1530689ed6ad46fa83239d166711"
+size   = 4821001
+
+  [slices."ios.arm64".libraries."limboai.gdextension"]
+  "ios.template_debug"   = "res://addons/limboai/bin/liblimboai.ios.template_debug.xcframework"
+  "ios.template_release" = "res://addons/limboai/bin/liblimboai.ios.template_release.xcframework"
+
+  [slices."ios.arm64".dependencies."limboai.gdextension"]
+  "ios.template_debug"   = "res://addons/limboai/bin/libgodot_jolt.ios.framework"
+  "ios.template_release" = "res://addons/limboai/bin/libgodot_jolt.ios.framework"

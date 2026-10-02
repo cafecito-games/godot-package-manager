@@ -87,8 +87,11 @@ func hasWindowsDrivePrefix(value string) bool {
 // sha256Pattern matches a bare SHA-256 digest: exactly 64 lowercase hex digits.
 var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// validateChecksum rejects checksum values that are not a bare SHA-256 digest.
-func validateChecksum(checksum string) error {
+// ValidateChecksum rejects checksum values that are not a bare SHA-256 digest.
+// It is exported because it is the single owner of the SHA-256 format rule:
+// every other package that validates a digest calls it rather than declaring a
+// second pattern.
+func ValidateChecksum(checksum string) error {
 	if !sha256Pattern.MatchString(checksum) {
 		return fmt.Errorf("checksum %q must be 64 lowercase hex digits (SHA-256)", checksum)
 	}
@@ -187,7 +190,7 @@ func validateSpec(name string, addon AddonSpec) error {
 		if addon.Source == SourceGit {
 			return fmt.Errorf("addon %q: checksum is not supported for git sources", name)
 		}
-		if err := validateChecksum(addon.Checksum); err != nil {
+		if err := ValidateChecksum(addon.Checksum); err != nil {
 			return fmt.Errorf("addon %q: invalid checksum: %w", name, err)
 		}
 	}
