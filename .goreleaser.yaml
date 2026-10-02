@@ -48,9 +48,19 @@ homebrew_casks:
     description: "CLI addon manager for Godot projects"
     # The release binaries are not code-signed, so strip the quarantine
     # attribute on install to avoid Gatekeeper blocking the executable.
-    hooks:
-      post:
-        install: |
-          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/gpm"]
+    #
+    # This uses custom_block rather than hooks.post.install because GoReleaser
+    # renders hook bodies inside Homebrew's deprecated `postflight` stanza,
+    # which now warns on every install. custom_block emits the declarative
+    # `postflight_steps` replacement directly.
+    #
+    # custom_block is templated exactly once, so {{staged_path}} is escaped to
+    # survive that pass and reach Homebrew's step runner literally.
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          if_path_exists "/usr/bin/xattr" do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ "{{staged_path}}" }}/gpm"]
           end
+        end
+      end
