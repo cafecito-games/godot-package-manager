@@ -77,3 +77,22 @@ func TestInitGitignoresTheStateFile(t *testing.T) {
 		require.Equal(t, existing, string(data), "an entry already present is not duplicated")
 	})
 }
+
+// TestInitLeavesNoManifestWhenTheGitignoreWriteFails pins that a failed init
+// performs no mutation it cannot retry: the idempotent .gitignore entry is
+// written first, so a failure there leaves no addons.toml for the retry to trip
+// over.
+func TestInitLeavesNoManifestWhenTheGitignoreWriteFails(t *testing.T) {
+	dir := t.TempDir()
+	// A directory where .gitignore belongs is neither readable nor writable as
+	// a file, without depending on the suite's effective user as a mode-based
+	// test would.
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".gitignore"), 0o755))
+
+	cmd := newInitCommand(&Options{})
+	cmd.SetArgs([]string{"--dir", dir})
+	require.Error(t, cmd.Execute())
+
+	_, err := os.Stat(filepath.Join(dir, "addons.toml"))
+	require.True(t, os.IsNotExist(err), "a failed init must not leave a manifest behind")
+}

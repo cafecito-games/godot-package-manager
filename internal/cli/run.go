@@ -157,14 +157,15 @@ func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Mani
 		if err != nil {
 			return nil, err
 		}
-		lock.Addons[spec.Name] = lockEntryFor(spec, fetched)
+		lockEntry := lockEntryFor(spec, fetched)
+		lock.Addons[spec.Name] = lockEntry
 		if err := lock.Save(r.LockPath); err != nil {
 			return nil, err
 		}
 		// Written only after a successful install, so state never claims slices
 		// that are not on disk. The reverse — on disk but unrecorded — only
 		// costs the next run a re-materialization.
-		stateEntry := stateEntryFor(fetched)
+		stateEntry := stateEntryFor(lockEntry, fetched)
 		state.Addons[spec.Name] = stateEntry
 		if err := r.saveState(state); err != nil {
 			return nil, err
@@ -333,10 +334,11 @@ func missingSlicesOnDisk(
 //
 // It is the single definition of the conditions under which state records
 // nothing usable: the install directory is absent, state has no entry for the
-// addon, or the entry's resolved version disagrees with the lock's. A state
-// entry never makes an absent or differently-versioned addon look installed,
-// which is also what makes an unsliced addon — which needs no slices and so has
-// an empty missing set whatever the disk holds — reconcile correctly.
+// addon, or the entry's resolved version or lock pin disagrees with the lock's.
+// A state entry never makes an absent addon, nor one materialized from another
+// version or another pin, look installed — which is also what makes an unsliced
+// addon, which needs no slices and so has an empty missing set whatever the
+// disk holds, reconcile correctly.
 func recordedSlices(
 	spec manifest.AddonSpec,
 	lock *manifest.Lockfile,
@@ -351,7 +353,15 @@ func recordedSlices(
 	if !found {
 		return nil, false
 	}
-	if entry.ResolvedVersion != lock.Addons[spec.Name].ResolvedVersion {
+	pinned := lock.Addons[spec.Name]
+	if entry.ResolvedVersion != pinned.ResolvedVersion {
+		return nil, false
+	}
+	// The version alone does not identify content: a republished release keeps
+	// its tag, so a state entry written against one lock must not satisfy a
+	// different one. Checking the pin is what keeps the fast path from leaving
+	// another branch's files in place, unfetched and unverified.
+	if entry.Pin != pinOf(pinned) {
 		return nil, false
 	}
 	recorded := make(map[string]struct{}, len(entry.Slices))
@@ -386,14 +396,32 @@ func lockEntryFor(spec manifest.AddonSpec, fetched source.FetchResult) manifest.
 }
 
 // stateEntryFor records what the fetch actually materialized on this machine,
-// which is the subset of the published set the selection mode asked for.
-func stateEntryFor(fetched source.FetchResult) manifest.StateEntry {
+// which is the subset of the published set the selection mode asked for, and
+// the lock pin it came from. The pin is read off the entry being written to the
+// lock rather than recomputed, so the two records cannot disagree.
+func stateEntryFor(entry manifest.LockEntry, fetched source.FetchResult) manifest.StateEntry {
 	installed := make([]string, 0, len(fetched.InstalledSlices))
 	for _, id := range fetched.InstalledSlices {
 		installed = append(installed, id.String())
 	}
 	sort.Strings(installed)
-	return manifest.StateEntry{ResolvedVersion: fetched.ResolvedVersion, Slices: installed}
+	return manifest.StateEntry{
+		ResolvedVersion: fetched.ResolvedVersion,
+		Slices:          installed,
+		Pin:             pinOf(entry),
+	}
+}
+
+// pinOf reduces a lock entry to the digest identifying the content it pins: the
+// index digest for a sliced addon, which in turn pins every slice archive, and
+// the archive checksum for an unsliced one. It is empty for a source with no
+// digest to carry, such as git, whose resolved commit SHA is already its
+// content identity.
+func pinOf(entry manifest.LockEntry) string {
+	if entry.IndexChecksum != "" {
+		return entry.IndexChecksum
+	}
+	return entry.Checksum
 }
 
 // verifyChecksum checks a fetched archive against the manifest-declared

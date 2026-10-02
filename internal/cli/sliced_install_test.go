@@ -598,3 +598,43 @@ func TestSlicedLockRecordsTheWholePublishedSet(t *testing.T) {
 	require.Equal(t, []string{"core", "macos"}, installedSlicesOf(t, projectRoot),
 		"while only core and the host slice are on this disk")
 }
+
+// TestSlicedInstallDoesNotTrustStateAcrossALockPinChange is the branch-switch
+// case. Two branches of one repository can share an addons.toml — and therefore
+// a spec_hash and a resolved version — while their committed addons.lock files
+// pin different bytes, because `gpm update` rewrites the pins without touching
+// the manifest. `.gpm-state.toml` is machine-local and survives the switch, so
+// the reconciliation cache must not report success and leave the other branch's
+// files in place, unfetched and unverified.
+func TestSlicedInstallDoesNotTrustStateAcrossALockPinChange(t *testing.T) {
+	withEnvironment(t, nil)
+	withHost(t, hostA)
+	publisher := servePublisher(t, packSlicedFixture(t, "one"))
+	projectRoot := newSlicedProject(t, publisher, "ios.arm64")
+
+	require.NoError(t, executeGPM(t, io.Discard, io.Discard, "install", "--dir", projectRoot))
+	markerPath := filepath.Join(projectRoot, "addons", slicedAddonName, "scripts", "marker.gd")
+	require.Contains(t, string(readFileBytes(t, markerPath)), "one")
+	lockOnFirstBranch := lockBytesOf(t, projectRoot)
+
+	// The other branch adopted a republication at the same version, which is
+	// what `gpm update` writes: a different index digest under one manifest.
+	publisher.publish(packSlicedFixture(t, "two"))
+	otherBranch := newSlicedProject(t, publisher, "ios.arm64")
+	require.NoError(t, executeGPM(t, io.Discard, io.Discard, "update", "--dir", otherBranch))
+	lockOnOtherBranch := lockBytesOf(t, otherBranch)
+	require.NotEqual(t, string(lockOnFirstBranch), string(lockOnOtherBranch))
+
+	// Checking out that branch replaces addons.lock and leaves the gitignored
+	// state file and addons/ exactly as the first branch wrote them.
+	require.NoError(t, os.WriteFile(filepath.Join(projectRoot, "addons.lock"), lockOnOtherBranch, 0o644))
+	requests := publisher.requestCount()
+
+	require.NoError(t, executeGPM(t, io.Discard, io.Discard, "install", "--dir", projectRoot))
+
+	require.Greater(t, publisher.requestCount(), requests,
+		"a lock pinning different bytes must be fetched, however current the state file looks")
+	require.Contains(t, string(readFileBytes(t, markerPath)), "two",
+		"the files on disk must be the ones the current lock pins")
+	require.Equal(t, string(lockOnOtherBranch), string(lockBytesOf(t, projectRoot)))
+}

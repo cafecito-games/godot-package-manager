@@ -65,7 +65,7 @@ func newReconcileScenario(t *testing.T) *reconcileScenario {
 			}},
 		}},
 		state: &manifest.State{Addons: map[string]manifest.StateEntry{
-			"sliced": {ResolvedVersion: "1.2.3", Slices: []string{"core", "macos"}},
+			"sliced": {ResolvedVersion: "1.2.3", Pin: checksumOf('a'), Slices: []string{"core", "macos"}},
 		}},
 	}
 }
@@ -117,10 +117,52 @@ func TestMissingSlicesOnDiskReportsEverythingWhenStateRecordsAnotherVersion(t *t
 	scenario := newReconcileScenario(t)
 	scenario.state.Addons["sliced"] = manifest.StateEntry{
 		ResolvedVersion: "1.0.0",
+		Pin:             checksumOf('a'),
 		Slices:          []string{"core", "macos"},
 	}
 	require.Equal(t, []string{"core", "macos"}, scenario.missing(t, "core", "macos"),
 		"a state entry recording a different version records nothing usable")
+}
+
+// TestMissingSlicesOnDiskReportsEverythingWhenStateRecordsAnotherPin is the
+// branch-switch case: two branches can share an addons.toml, and therefore a
+// spec_hash and a resolved version, while their committed addons.lock files pin
+// different bytes. The version matches and the slice IDs match, so only the pin
+// distinguishes the files on disk from the ones the lock now demands.
+func TestMissingSlicesOnDiskReportsEverythingWhenStateRecordsAnotherPin(t *testing.T) {
+	scenario := newReconcileScenario(t)
+	scenario.state.Addons["sliced"] = manifest.StateEntry{
+		ResolvedVersion: "1.2.3",
+		Pin:             checksumOf('9'),
+		Slices:          []string{"core", "macos"},
+	}
+	require.Equal(t, []string{"core", "macos"}, scenario.missing(t, "core", "macos"),
+		"a state entry written against another lock pin records nothing usable")
+}
+
+// TestMissingSlicesOnDiskReportsEverythingForAnUnslicedPinChange is the same
+// case for an addon with a single archive, whose pin is its checksum.
+func TestMissingSlicesOnDiskReportsEverythingForAnUnslicedPinChange(t *testing.T) {
+	scenario := newReconcileScenario(t)
+	scenario.lock.Addons["sliced"] = manifest.LockEntry{
+		ResolvedVersion: "1.2.3",
+		SpecHash:        "hash",
+		Checksum:        checksumOf('b'),
+	}
+	scenario.state.Addons["sliced"] = manifest.StateEntry{
+		ResolvedVersion: "1.2.3",
+		Pin:             checksumOf('c'),
+	}
+	require.Empty(t, scenario.missing(t))
+
+	trusted := func() bool {
+		_, ok := recordedSlices(scenario.spec, scenario.lock, scenario.state, scenario.addonsDir)
+		return ok
+	}
+	require.False(t, trusted(), "an unsliced addon whose archive checksum changed records nothing usable")
+
+	scenario.state.Addons["sliced"] = manifest.StateEntry{ResolvedVersion: "1.2.3", Pin: checksumOf('b')}
+	require.True(t, trusted())
 }
 
 // TestVerifyChecksumComparesTheIndexPin is the comparison this issue exists for.

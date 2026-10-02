@@ -46,11 +46,16 @@ func newInitCommand(opts *Options) *cobra.Command {
 			} else if !errors.Is(err, fs.ErrNotExist) {
 				return err
 			}
-			if err := os.WriteFile(path, []byte(starterManifest), 0o644); err != nil {
-				return &output.ManifestError{Err: err}
-			}
+			// The .gitignore entry is written first because it is idempotent:
+			// a failure here leaves nothing behind and the command retries
+			// cleanly, whereas writing the manifest first would leave a
+			// half-initialized project whose retry fails on the manifest that
+			// already exists.
 			if err := ignoreStateFile(dir); err != nil {
 				return err
+			}
+			if err := os.WriteFile(path, []byte(starterManifest), 0o644); err != nil {
+				return &output.ManifestError{Err: err}
 			}
 			verbosef(cmd, opts, "manifest: %s\n", path)
 			if !opts.Quiet {
