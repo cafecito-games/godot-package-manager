@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/cafecito-games/godot-package-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/project"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,4 +31,49 @@ func TestInitDoesNotOverwrite(t *testing.T) {
 	require.Error(t, err)
 	var manifestErr *output.ManifestError
 	require.ErrorAs(t, err, &manifestErr)
+}
+
+// TestInitGitignoresTheStateFile pins that the machine-local state file is
+// ignored by default: committing it would publish one machine's slice layout to
+// the whole team.
+func TestInitGitignoresTheStateFile(t *testing.T) {
+	t.Run("creates .gitignore when none exists", func(t *testing.T) {
+		dir := t.TempDir()
+		cmd := newInitCommand(&Options{})
+		cmd.SetArgs([]string{"--dir", dir})
+		require.NoError(t, cmd.Execute())
+
+		data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+		require.NoError(t, err)
+		require.Equal(t, project.StateFileName+"\n", string(data))
+	})
+
+	t.Run("appends to an existing .gitignore", func(t *testing.T) {
+		dir := t.TempDir()
+		gitignore := filepath.Join(dir, ".gitignore")
+		require.NoError(t, os.WriteFile(gitignore, []byte(".godot/\nexport_presets.cfg"), 0o644))
+
+		cmd := newInitCommand(&Options{})
+		cmd.SetArgs([]string{"--dir", dir})
+		require.NoError(t, cmd.Execute())
+
+		data, err := os.ReadFile(gitignore)
+		require.NoError(t, err)
+		require.Equal(t, ".godot/\nexport_presets.cfg\n"+project.StateFileName+"\n", string(data))
+	})
+
+	t.Run("leaves an existing entry alone", func(t *testing.T) {
+		dir := t.TempDir()
+		gitignore := filepath.Join(dir, ".gitignore")
+		existing := ".godot/\n  " + project.StateFileName + "  \n"
+		require.NoError(t, os.WriteFile(gitignore, []byte(existing), 0o644))
+
+		cmd := newInitCommand(&Options{})
+		cmd.SetArgs([]string{"--dir", dir})
+		require.NoError(t, cmd.Execute())
+
+		data, err := os.ReadFile(gitignore)
+		require.NoError(t, err)
+		require.Equal(t, existing, string(data), "an entry already present is not duplicated")
+	})
 }

@@ -207,9 +207,9 @@ func (fixture slicedFixture) writeAsset(w http.ResponseWriter, name string) {
 // test, so a result never depends on which machine runs the suite.
 func withHost(t *testing.T, host slice.Host) {
 	t.Helper()
-	previous := currentHost
-	currentHost = func() slice.Host { return host }
-	t.Cleanup(func() { currentHost = previous })
+	previous := slice.CurrentHost
+	slice.CurrentHost = func() slice.Host { return host }
+	t.Cleanup(func() { slice.CurrentHost = previous })
 }
 
 // macOSHost is the machine most sliced tests simulate: it is the one host whose

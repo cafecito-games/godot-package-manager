@@ -514,7 +514,7 @@ func TestIndexPublishedSliceIDsFeedsSelectSlices(t *testing.T) {
 		{Platform: "ios", Architecture: "arm64"},
 	}, published)
 
-	selection, err := SelectSlices([]string{"ios.arm64"}, Host{OperatingSystem: "linux", Architecture: "amd64"}, published, false)
+	selection, err := SelectSlices([]string{"ios.arm64"}, Host{OperatingSystem: "linux", Architecture: "amd64"}, published, SelectDeclaredPlatforms)
 	require.NoError(t, err)
 	require.False(t, selection.HostSupported)
 	require.Equal(t, []SliceID{CoreSliceID(), {Platform: "ios", Architecture: "arm64"}}, selection.Slices)

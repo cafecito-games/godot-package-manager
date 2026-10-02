@@ -329,7 +329,7 @@ func TestSelectSlicesReturnsCorePlusDeclaredPlusTheFirstPublishedHostCandidate(t
 	published := publishedSlices(t, "core", "ios.arm64", "android.arm64", "macos", "windows.x86_64")
 	host := Host{OperatingSystem: "darwin", Architecture: "arm64"}
 
-	selection, err := SelectSlices([]string{"ios.arm64", "android.arm64"}, host, published, false)
+	selection, err := SelectSlices([]string{"ios.arm64", "android.arm64"}, host, published, SelectDeclaredPlatforms)
 	require.NoError(t, err)
 	require.Equal(t, []string{"core", "android.arm64", "ios.arm64", "macos"}, sliceIDStrings(selection.Slices))
 	require.True(t, selection.HostSupported)
@@ -339,12 +339,12 @@ func TestSelectSlicesReturnsCorePlusDeclaredPlusTheFirstPublishedHostCandidate(t
 func TestSelectSlicesPrefersTheMostSpecificPublishedHostCandidate(t *testing.T) {
 	host := Host{OperatingSystem: "darwin", Architecture: "arm64"}
 
-	selection, err := SelectSlices(nil, host, publishedSlices(t, "core", "macos", "macos.universal", "macos.arm64"), false)
+	selection, err := SelectSlices(nil, host, publishedSlices(t, "core", "macos", "macos.universal", "macos.arm64"), SelectDeclaredPlatforms)
 	require.NoError(t, err)
 	require.Equal(t, "macos.arm64", selection.HostSlice.String())
 	require.Equal(t, []string{"core", "macos.arm64"}, sliceIDStrings(selection.Slices))
 
-	selection, err = SelectSlices(nil, host, publishedSlices(t, "core", "macos", "macos.universal"), false)
+	selection, err = SelectSlices(nil, host, publishedSlices(t, "core", "macos", "macos.universal"), SelectDeclaredPlatforms)
 	require.NoError(t, err)
 	require.Equal(t, "macos.universal", selection.HostSlice.String())
 }
@@ -353,7 +353,7 @@ func TestSelectSlicesDeduplicatesDeclaredEntries(t *testing.T) {
 	published := publishedSlices(t, "core", "ios.arm64", "linux.x86_64")
 	host := Host{OperatingSystem: "linux", Architecture: "amd64"}
 
-	selection, err := SelectSlices([]string{"ios.arm64", "ios.arm64", "linux.x86_64"}, host, published, false)
+	selection, err := SelectSlices([]string{"ios.arm64", "ios.arm64", "linux.x86_64"}, host, published, SelectDeclaredPlatforms)
 	require.NoError(t, err)
 	require.Equal(t, []string{"core", "ios.arm64", "linux.x86_64"}, sliceIDStrings(selection.Slices))
 }
@@ -362,7 +362,7 @@ func TestSelectSlicesWithAllPlatformsReturnsEveryPublishedSlice(t *testing.T) {
 	published := publishedSlices(t, "windows.x86_64", "core", "ios.arm64", "macos", "android.arm64")
 	host := Host{OperatingSystem: "darwin", Architecture: "arm64"}
 
-	selection, err := SelectSlices([]string{"ios.arm64"}, host, published, true)
+	selection, err := SelectSlices([]string{"ios.arm64"}, host, published, SelectAllPublishedSlices)
 	require.NoError(t, err)
 	require.Equal(t, []string{"core", "android.arm64", "ios.arm64", "macos", "windows.x86_64"}, sliceIDStrings(selection.Slices))
 	require.True(t, selection.HostSupported)
@@ -375,7 +375,7 @@ func TestSelectSlicesReportsAnUnsupportedHostWithoutFailing(t *testing.T) {
 		{OperatingSystem: "darwin", Architecture: "arm64"},
 		{OperatingSystem: "plan9", Architecture: "amd64"},
 	} {
-		selection, err := SelectSlices([]string{"ios.arm64"}, host, published, false)
+		selection, err := SelectSlices([]string{"ios.arm64"}, host, published, SelectDeclaredPlatforms)
 		require.NoError(t, err, "an unsupported host is a diagnostic, not an error")
 		require.False(t, selection.HostSupported, "host %+v", host)
 		require.Equal(t, SliceID{}, selection.HostSlice)
@@ -388,9 +388,9 @@ func TestSelectSlicesIsDeterministicAndDoesNotMutateItsArguments(t *testing.T) {
 	published := publishedSlices(t, "windows.x86_64", "core", "ios.arm64", "android.arm64", "macos")
 	host := Host{OperatingSystem: "darwin", Architecture: "arm64"}
 
-	first, err := SelectSlices(declared, host, published, false)
+	first, err := SelectSlices(declared, host, published, SelectDeclaredPlatforms)
 	require.NoError(t, err)
-	second, err := SelectSlices(declared, host, published, false)
+	second, err := SelectSlices(declared, host, published, SelectDeclaredPlatforms)
 	require.NoError(t, err)
 	require.Equal(t, first, second)
 	require.Equal(t, []string{"core", "android.arm64", "ios.arm64", "macos", "windows.x86_64"}, sliceIDStrings(first.Slices))
@@ -399,7 +399,7 @@ func TestSelectSlicesIsDeterministicAndDoesNotMutateItsArguments(t *testing.T) {
 	require.Equal(t, []string{"windows.x86_64", "core", "ios.arm64", "android.arm64", "macos"}, sliceIDStrings(published), "published must not be reordered")
 
 	first.Slices[0] = SliceID{Platform: "web"}
-	third, err := SelectSlices(declared, host, published, false)
+	third, err := SelectSlices(declared, host, published, SelectDeclaredPlatforms)
 	require.NoError(t, err)
 	require.Equal(t, second, third, "results must not share state")
 }
@@ -410,7 +410,7 @@ func TestSelectSlicesIsFailClosed(t *testing.T) {
 		name             string
 		declared         []string
 		published        []string
-		allPlatforms     bool
+		mode             SelectionMode
 		expectedExitCode output.ExitCode
 		expectedMessage  []string
 	}{
@@ -425,7 +425,7 @@ func TestSelectSlicesIsFailClosed(t *testing.T) {
 			name:             "declared platform absent with all platforms requested",
 			declared:         []string{"ios.arm64"},
 			published:        []string{"core", "linux.x86_64"},
-			allPlatforms:     true,
+			mode:             SelectAllPublishedSlices,
 			expectedExitCode: output.ExitFetch,
 			expectedMessage:  []string{"ios.arm64"},
 		},
@@ -447,7 +447,7 @@ func TestSelectSlicesIsFailClosed(t *testing.T) {
 			name:             "published set missing core with all platforms requested",
 			declared:         nil,
 			published:        []string{"linux.x86_64"},
-			allPlatforms:     true,
+			mode:             SelectAllPublishedSlices,
 			expectedExitCode: output.ExitFetch,
 			expectedMessage:  []string{"core"},
 		},
@@ -490,7 +490,7 @@ func TestSelectSlicesIsFailClosed(t *testing.T) {
 
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
-			selection, err := SelectSlices(row.declared, host, publishedSlices(t, row.published...), row.allPlatforms)
+			selection, err := SelectSlices(row.declared, host, publishedSlices(t, row.published...), row.mode)
 			require.Error(t, err)
 			require.Equal(t, Selection{}, selection, "a failed selection returns no partial result")
 			require.Equal(t, row.expectedExitCode, output.CodeFor(err))
@@ -554,7 +554,7 @@ func TestVocabulariesAreClosed(t *testing.T) {
 				[]string{platform},
 				Host{OperatingSystem: "plan9", Architecture: "amd64"},
 				publishedSlices(t, "core", platform),
-				false,
+				SelectDeclaredPlatforms,
 			)
 			require.NoError(t, err, "SelectSlices must accept declared platform %q", platform)
 			require.Equal(t, []string{CorePlatform, platform}, sliceIDStrings(selection.Slices))

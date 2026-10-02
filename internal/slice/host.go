@@ -5,8 +5,8 @@ import (
 	"slices"
 )
 
-// currentOperatingSystem and currentArchitecture are the seams through which
-// CurrentHost reads the running machine, so tests can simulate any host.
+// currentOperatingSystem and currentArchitecture are what CurrentHost reports
+// by default: the machine this process is actually running on.
 var (
 	currentOperatingSystem = runtime.GOOS
 	currentArchitecture    = runtime.GOARCH
@@ -21,7 +21,14 @@ type Host struct {
 }
 
 // CurrentHost returns the machine gpm is running on.
-func CurrentHost() Host {
+//
+// It is a package-level variable rather than a plain function because it is the
+// one seam the whole tree resolves a host through: the consumer that reconciles
+// a needed slice set against this disk and the fetcher that materializes it both
+// ask, and a test that simulated the host for only one of them would be
+// asserting against a machine that cannot exist. No other package declares a
+// host resolver of its own.
+var CurrentHost = func() Host {
 	return Host{OperatingSystem: currentOperatingSystem, Architecture: currentArchitecture}
 }
 

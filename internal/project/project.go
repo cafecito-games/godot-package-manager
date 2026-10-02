@@ -12,6 +12,11 @@ import (
 	"github.com/cafecito-games/godot-package-manager/internal/output"
 )
 
+// StateFileName is the name of the machine-local state file inside a project
+// root. It is the single declaration of the name, so the path derivation here
+// and `gpm init`'s .gitignore entry cannot drift apart.
+const StateFileName = ".gpm-state.toml"
+
 // Project describes a located Godot project and its gpm-managed paths.
 type Project struct {
 	Root         string // directory containing project.godot
@@ -62,7 +67,7 @@ func forRoot(root string) *Project {
 		Root:         root,
 		ManifestPath: filepath.Join(root, "addons.toml"),
 		LockPath:     filepath.Join(root, "addons.lock"),
-		StatePath:    filepath.Join(root, ".gpm-state.toml"),
+		StatePath:    filepath.Join(root, StateFileName),
 		AddonsDir:    filepath.Join(root, "addons"),
 	}
 }

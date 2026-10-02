@@ -58,22 +58,35 @@ type Limits struct {
 }
 
 // FetcherFor returns the Fetcher matching the spec's source type using the
-// package's default size limits.
+// package's default size limits and the default slice selection mode.
 func FetcherFor(spec manifest.AddonSpec) (Fetcher, error) {
-	return FetcherForWithLimits(Limits{})(spec)
+	return FetcherForWithLimits(Limits{}, slice.SelectDeclaredPlatforms)(spec)
 }
 
 // FetcherForWithLimits returns a factory that produces fetchers configured with
-// the given size limits. A zero Limits value matches the behavior of FetcherFor.
-func FetcherForWithLimits(limits Limits) func(manifest.AddonSpec) (Fetcher, error) {
+// the given size limits and slice selection mode. A zero Limits value and the
+// zero slice.SelectionMode together match the behavior of FetcherFor.
+//
+// The mode is only ever passed through to slice.SelectSlices on the sliced
+// path: this package decides nothing about what a mode means, and reads no
+// environment to discover one.
+func FetcherForWithLimits(limits Limits, mode slice.SelectionMode) func(manifest.AddonSpec) (Fetcher, error) {
 	return func(spec manifest.AddonSpec) (Fetcher, error) {
 		switch spec.Source {
 		case manifest.SourceGit:
 			return &GitFetcher{}, nil
 		case manifest.SourceArchive:
-			return &ArchiveFetcher{maxBytes: limits.MaxDownloadBytes, maxExtracted: limits.MaxExtractedBytes}, nil
+			return &ArchiveFetcher{
+				maxBytes:      limits.MaxDownloadBytes,
+				maxExtracted:  limits.MaxExtractedBytes,
+				selectionMode: mode,
+			}, nil
 		case manifest.SourceGitHubRelease:
-			return &GitHubReleaseFetcher{maxBytes: limits.MaxDownloadBytes, maxExtracted: limits.MaxExtractedBytes}, nil
+			return &GitHubReleaseFetcher{
+				maxBytes:      limits.MaxDownloadBytes,
+				maxExtracted:  limits.MaxExtractedBytes,
+				selectionMode: mode,
+			}, nil
 		default:
 			return nil, &output.FetchError{Err: fmt.Errorf("no fetcher for source %q", spec.Source)}
 		}

@@ -19,6 +19,7 @@ import (
 
 	"github.com/cafecito-games/godot-package-manager/internal/manifest"
 	"github.com/cafecito-games/godot-package-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/slice"
 )
 
 const (
@@ -49,6 +50,9 @@ type ArchiveFetcher struct {
 	maxBytes int64
 	// maxExtracted overrides the extracted size cap; 0 uses maxExtractedBytes.
 	maxExtracted int64
+	// selectionMode is passed through to the sliced path; the zero value is the
+	// declared-platforms default.
+	selectionMode slice.SelectionMode
 }
 
 // Fetch downloads spec.URL, extracts it into a new temp directory, and reports
@@ -67,6 +71,7 @@ func (f *ArchiveFetcher) Fetch(ctx context.Context, spec manifest.AddonSpec) (Fe
 			resolve:        resolve,
 			stagingPattern: "gpm-archive-*",
 			diagnostics:    archiveSlicedDiagnostics(spec),
+			selectionMode:  f.selectionMode,
 		}
 		return fetcher.fetch(ctx, spec, indexURL)
 	}

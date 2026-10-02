@@ -3,11 +3,14 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/cafecito-games/godot-package-manager/internal/project"
 )
 
 const listAddonsToml = `[addons]
@@ -59,4 +62,61 @@ func TestListCommandJSON(t *testing.T) {
 	listing := listings[0]
 	require.Equal(t, "my-addon", listing["name"])
 	require.Equal(t, true, listing["installed"])
+}
+
+// TestListReportsInstalledSlicesFromState pins that `gpm list` reports what is
+// on this disk. It never falls back to the lock's slices table, which is the
+// published set and not what was materialized.
+func TestListReportsInstalledSlicesFromState(t *testing.T) {
+	withEnvironment(t, nil)
+	withHost(t, hostA)
+	publisher := servePublisher(t, packSlicedFixture(t, "one"))
+	projectRoot := newSlicedProject(t, publisher, "ios.arm64")
+	require.NoError(t, executeGPM(t, io.Discard, io.Discard, "install", "--host-only", "--dir", projectRoot))
+
+	listSlices := func(t *testing.T, args ...string) ([]string, string) {
+		t.Helper()
+		stdout := &bytes.Buffer{}
+		stderr := &bytes.Buffer{}
+		require.NoError(t, executeGPM(t, stdout, stderr,
+			append([]string{"list", "--json", "--dir", projectRoot}, args...)...))
+		var listings []struct {
+			Name   string   `json:"name"`
+			Slices []string `json:"slices"`
+		}
+		require.NoError(t, json.Unmarshal(stdout.Bytes(), &listings))
+		require.Len(t, listings, 1)
+		return listings[0].Slices, stderr.String()
+	}
+
+	slices, _ := listSlices(t)
+	require.Equal(t, []string{"core", "macos"}, slices,
+		"after a host-only install the listing is core plus the host slice alone")
+
+	statePath := filepath.Join(projectRoot, project.StateFileName)
+	require.NoError(t, os.Remove(statePath))
+	slices, _ = listSlices(t)
+	require.Empty(t, slices, "an absent state file reports an empty slice list")
+
+	require.NoError(t, os.WriteFile(statePath, []byte("not = = toml ["), 0o644))
+	slices, _ = listSlices(t)
+	require.Empty(t, slices, "an unparseable state file reports an empty slice list and still exits 0")
+
+	t.Run("the text branch names the slices and respects --quiet", func(t *testing.T) {
+		require.NoError(t, executeGPM(t, io.Discard, io.Discard, "install", "--host-only", "--dir", projectRoot))
+		stdout := &bytes.Buffer{}
+		require.NoError(t, executeGPM(t, stdout, io.Discard, "list", "--dir", projectRoot))
+		require.Contains(t, stdout.String(), "core macos")
+
+		quiet := &bytes.Buffer{}
+		require.NoError(t, executeGPM(t, quiet, io.Discard, "list", "--quiet", "--dir", projectRoot))
+		require.Empty(t, quiet.String())
+	})
+
+	t.Run("an unparseable state file is reported under --verbose", func(t *testing.T) {
+		require.NoError(t, os.WriteFile(statePath, []byte("not = = toml ["), 0o644))
+		stderr := &bytes.Buffer{}
+		require.NoError(t, executeGPM(t, io.Discard, stderr, "list", "--verbose", "--dir", projectRoot))
+		require.Contains(t, stderr.String(), "ignoring unparseable state file")
+	})
 }
