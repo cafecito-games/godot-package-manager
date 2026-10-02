@@ -225,3 +225,124 @@ func TestValidateChecksumField(t *testing.T) {
 		require.Error(t, m.Validate())
 	})
 }
+
+func TestValidatePlatformsAndIndexFailClosed(t *testing.T) {
+	cases := []struct {
+		name          string
+		manifest      *Manifest
+		wantError     bool
+		errorContains string
+	}{
+		{
+			name: "valid declared platforms accepted",
+			manifest: &Manifest{
+				Project: ProjectConfig{Platforms: []string{"ios.arm64", "macos"}},
+				Addons: map[string]AddonSpec{
+					"x": {Name: "x", Source: SourceArchive, URL: "https://example.com/a.zip", Platforms: []string{"ios.arm64", "macos"}},
+				},
+			},
+		},
+		{
+			name: "project platforms absent accepted",
+			manifest: &Manifest{Addons: map[string]AddonSpec{
+				"x": {Name: "x", Source: SourceArchive, URL: "https://example.com/a.zip"},
+			}},
+		},
+		{
+			name: "project platforms empty accepted",
+			manifest: &Manifest{
+				Project: ProjectConfig{Platforms: []string{}},
+				Addons: map[string]AddonSpec{
+					"x": {Name: "x", Source: SourceArchive, URL: "https://example.com/a.zip", Platforms: []string{}},
+				},
+			},
+		},
+		{
+			name: "duplicate platforms accepted",
+			manifest: &Manifest{Addons: map[string]AddonSpec{
+				"x": {Name: "x", Source: SourceArchive, URL: "https://example.com/a.zip", Platforms: []string{"macos", "macos"}},
+			}},
+		},
+		{
+			name:          "unknown project platform rejected",
+			manifest:      &Manifest{Project: ProjectConfig{Platforms: []string{"solaris"}}},
+			wantError:     true,
+			errorContains: "unknown platform",
+		},
+		{
+			name:          "core in project platforms rejected",
+			manifest:      &Manifest{Project: ProjectConfig{Platforms: []string{"core"}}},
+			wantError:     true,
+			errorContains: "implicit",
+		},
+		{
+			name: "core in per-addon platforms rejected",
+			manifest: &Manifest{Addons: map[string]AddonSpec{
+				"x": {Name: "x", Source: SourceArchive, URL: "https://example.com/a.zip", Platforms: []string{"core"}},
+			}},
+			wantError:     true,
+			errorContains: "implicit",
+		},
+		{
+			name: "unknown per-addon platform rejected",
+			manifest: &Manifest{Addons: map[string]AddonSpec{
+				"x": {Name: "x", Source: SourceArchive, URL: "https://example.com/a.zip", Platforms: []string{"macos.sparc"}},
+			}},
+			wantError:     true,
+			errorContains: "architecture",
+		},
+		{
+			name: "index on archive accepted",
+			manifest: &Manifest{Addons: map[string]AddonSpec{
+				"x": {Name: "x", Source: SourceArchive, URL: "https://example.com/a.zip", Index: "https://example.com/gpm-index.toml"},
+			}},
+		},
+		{
+			name: "index on git rejected",
+			manifest: &Manifest{Addons: map[string]AddonSpec{
+				"x": {Name: "x", Source: SourceGit, URL: "https://example.com/r.git", Version: "v1", Index: "https://example.com/gpm-index.toml"},
+			}},
+			wantError:     true,
+			errorContains: "index",
+		},
+		{
+			name: "index on github-release rejected",
+			manifest: &Manifest{Addons: map[string]AddonSpec{
+				"x": {Name: "x", Source: SourceGitHubRelease, Repo: "o/r", Version: "1.0", Index: "https://example.com/gpm-index.toml"},
+			}},
+			wantError:     true,
+			errorContains: "index",
+		},
+		{
+			name: "relative index URL rejected",
+			manifest: &Manifest{Addons: map[string]AddonSpec{
+				"x": {Name: "x", Source: SourceArchive, URL: "https://example.com/a.zip", Index: "gpm-index.toml"},
+			}},
+			wantError:     true,
+			errorContains: "scheme",
+		},
+		{
+			name: "non-http index URL rejected",
+			manifest: &Manifest{Addons: map[string]AddonSpec{
+				"x": {Name: "x", Source: SourceArchive, URL: "https://example.com/a.zip", Index: "file:///etc/passwd"},
+			}},
+			wantError:     true,
+			errorContains: "scheme",
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := testCase.manifest.Validate()
+			if !testCase.wantError {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			var manifestError *output.ManifestError
+			require.True(t, errors.As(err, &manifestError))
+			require.Equal(t, output.ExitCode(3), output.CodeFor(err))
+			require.Contains(t, err.Error(), testCase.errorContains)
+		})
+	}
+}

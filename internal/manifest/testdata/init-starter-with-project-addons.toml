@@ -1,0 +1,25 @@
+# Godot addon manifest managed by gpm.
+# Add addons with `gpm add` or by hand. Example:
+#
+# [addons.dialogue_manager]
+# source      = "git"
+# url         = "https://github.com/owner/dialogue.git"
+# version     = "v2.1.0"
+# source_path = "addons/dialogue_manager"
+
+
+[project]
+platforms = ["ios.arm64", "android.arm64"]
+
+[addons]
+
+[addons.limboai]
+source  = "github-release"
+repo    = "limbonaut/limboai"
+version = "v1.4.0"
+
+[addons.sliced_tool]
+source    = "archive"
+url       = "https://example.com/tool-v1.zip"
+index     = "https://example.com/gpm-index.toml"
+platforms = ["macos"]
