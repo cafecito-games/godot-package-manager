@@ -12,6 +12,7 @@ import (
 
 	"github.com/cafecito-games/godot-package-manager/internal/manifest"
 	"github.com/cafecito-games/godot-package-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/slice"
 )
 
 const defaultGitHubAPIBase = "https://api.github.com"
@@ -44,6 +45,11 @@ type ghRelease struct {
 }
 
 // Fetch resolves the release tag, selects the matching asset, and extracts it.
+//
+// A release that publishes a slice.IndexFileName asset is a sliced addon and
+// takes the sliced path instead: the index names the archives, only the slices
+// this project needs are downloaded, and the merged tree is still one
+// directory, so nothing downstream changes.
 func (f *GitHubReleaseFetcher) Fetch(ctx context.Context, spec manifest.AddonSpec) (FetchResult, error) {
 	base := f.APIBase
 	if base == "" {
@@ -66,6 +72,21 @@ func (f *GitHubReleaseFetcher) Fetch(ctx context.Context, spec manifest.AddonSpe
 	if err := json.Unmarshal(body, &release); err != nil {
 		return FetchResult{}, &output.FetchError{Err: fmt.Errorf("parsing release JSON: %w", err)}
 	}
+
+	resolve := releaseSliceResolver(release.Assets, f.assetURLRewrite)
+	if indexURL, sliced := slicedIndexURL(spec, resolve); sliced {
+		fetcher := &slicedFetcher{
+			client:         f.client,
+			maxBytes:       f.maxBytes,
+			maxExtracted:   f.maxExtracted,
+			header:         githubHeader("application/octet-stream"),
+			resolve:        resolve,
+			stagingPattern: "gpm-ghrel-*",
+			diagnostics:    releaseSlicedDiagnostics(spec),
+		}
+		return fetcher.fetch(ctx, spec, indexURL)
+	}
+
 	asset, err := selectAsset(release.Assets, spec.Asset)
 	if err != nil {
 		return FetchResult{}, err
@@ -156,4 +177,17 @@ func annotateGitHubError(err error) error {
 				"(e.g. export GITHUB_TOKEN=$(gh auth token))", err)}
 	}
 	return err
+}
+
+// releaseSlicedDiagnostics reports the manifest fields a sliced release ignores.
+// A sliced addon's archives are named by its index, so `asset` selects nothing;
+// it is reported rather than honored, because honoring it would mean installing
+// one archive of a set that is only complete together.
+func releaseSlicedDiagnostics(spec manifest.AddonSpec) []string {
+	if spec.Asset == "" {
+		return nil
+	}
+	return []string{fmt.Sprintf(
+		"addon %q is sliced, so its archives are named by %s and `asset` (%s) is ignored",
+		spec.Name, slice.IndexFileName, spec.Asset)}
 }
