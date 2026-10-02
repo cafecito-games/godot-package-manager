@@ -43,6 +43,18 @@ type ExtensionEntries map[ExtensionSection]map[string]string
 // file gpm generates into a slice archive rather than an edit of the author's own
 // working file, and it makes determinism hold by construction.
 //
+// An entry is grouped under exactly the slice ID its key reduces to, which is
+// what ReduceLibraryKey defines. A Godot tag carries an architecture only
+// sometimes, so one platform's entries legitimately land under both its generic
+// slice ID and an architecture-specific one: godot_jolt writes macos.editor
+// beside macos.template_release.universal, and nobodywho writes macos.debug
+// beside macos.debug.arm64. Deciding how such a platform is finally published —
+// whether an architecture-less entry is fanned out into every architecture slice
+// the addon ships, which the index schema accepts, since a key naming no
+// architecture is valid inside an architecture-specific slice — is a whole-addon
+// decision that needs the published slice set, so it belongs to the packager and
+// not here. This function sees one file and reports what each key says.
+//
 // addonRoot is the addon's res:// root, for instance "res://addons/limboai". It
 // is a parameter rather than something derived from a path on disk because this
 // function performs no filesystem access at all: an entry's containment in the

@@ -1218,3 +1218,40 @@ android.release.arm64 = "res://addons/demo/bin/libdemo.android.so"
 	require.Equal(t, sectionsOf(t, []byte(content)), sectionsOf(t, reassembled),
 		"every entry survives with its value unchanged")
 }
+
+// TestExtensionPartitionGroupsEntriesByExactlyTheirReducedSliceID pins the
+// grouping contract for a platform whose entries carry an architecture only
+// sometimes, which is the shape real addons ship: godot_jolt writes macos.editor
+// beside macos.template_release.universal, nobodywho writes macos.debug beside
+// macos.debug.arm64.
+//
+// Each entry is reported under exactly the slice ID its key reduces to. Note that
+// the host candidate chain in host.go installs the FIRST published slice it
+// matches rather than every matching one, so a platform published across both a
+// generic and an architecture-specific slice needs the packager to decide how it
+// is finally published — the index schema accepts an architecture-less key inside
+// an architecture-specific slice precisely so it can fan one out. That decision
+// needs the whole addon's published slice set, so it is not taken here.
+func TestExtensionPartitionGroupsEntriesByExactlyTheirReducedSliceID(t *testing.T) {
+	const content = `[libraries]
+
+macos.editor = "res://addons/demo/bin/libdemo.macos.editor.framework"
+macos.template_debug = "res://addons/demo/bin/libdemo.macos.debug.framework"
+macos.template_release.universal = "res://addons/demo/bin/libdemo.macos.universal.framework"
+`
+	_, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+	require.NoError(t, err)
+	require.Equal(t, map[SliceID]ExtensionEntries{
+		{Platform: "macos"}: {SectionLibraries: {
+			"macos.editor":         "res://addons/demo/bin/libdemo.macos.editor.framework",
+			"macos.template_debug": "res://addons/demo/bin/libdemo.macos.debug.framework",
+		}},
+		{Platform: "macos", Architecture: "universal"}: {SectionLibraries: {
+			"macos.template_release.universal": "res://addons/demo/bin/libdemo.macos.universal.framework",
+		}},
+	}, removed)
+
+	// The generic and the architecture-specific slice are distinct members of the
+	// published set, which is what makes the packager's decision necessary.
+	require.Len(t, removed, 2)
+}
