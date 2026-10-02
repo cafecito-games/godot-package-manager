@@ -78,18 +78,38 @@ hide a typo instead of reporting it. A tag may not be empty, may not contain
 whitespace, and may not have an empty component, which is what a leading,
 trailing, or doubled `.` produces.
 
-### No Build Target Appears In A Slice ID
+### Only The Architecture Survives Into A Slice ID
 
-Godot `.gdextension` keys carry a build target as well: `debug`, `editor`,
-`release`, `template_debug`, and `template_release`. A slice carries *every*
-build target for its platform, so when `gpm` reduces a library key to the slice
-that owns it, the build-target component is dropped. Both
-`macos.debug` and `macos.template_release` belong to the `macos` slice.
+A Godot `.gdextension` key carries more axes than a slice ID does. Besides the
+platform and the architecture, a key may name:
 
-A component that is neither a known architecture nor a known build target is
-rejected rather than dropped, because silently ignoring it would file the
-binary under the wrong slice and turn a packaging mistake into an export
-failure.
+| Axis | Values | Example key |
+| --- | --- | --- |
+| Build target | `debug`, `editor`, `release`, `template_debug`, `template_release` | `macos.template_release` |
+| Float precision | `single`, `double` | `windows.x86_64.double.release` |
+| Platform variant | `simulator` | `ios.simulator.release` |
+
+A slice carries *every* value of each of those axes for its platform, so when
+`gpm` reduces a library key to the slice that owns it, all three are dropped and
+only the architecture survives. `macos.debug` and `macos.template_release` both
+belong to `macos`; `windows.x86_64.single.debug` and
+`windows.x86_64.double.release` both belong to `windows.x86_64`; and
+`ios.release` and `ios.simulator.release` both belong to `ios`.
+
+The iOS simulator is the one worth spelling out. Godot writes it as a variant of
+the `ios` platform rather than as an architecture, and the device and simulator
+libraries land in the **same** slice deliberately: a project targeting iOS needs
+both — the simulator to run the game on a development Mac, the device library to
+export — and splitting them would let a project install one and silently lack
+the other.
+
+Float precision appears in every library key of an addon built with godot-cpp's
+SCons setup, which emits `<platform>.<architecture>.<precision>.<build target>`.
+
+A component that belongs to none of those axes is rejected rather than dropped,
+because silently ignoring it would file the binary under the wrong slice and
+turn a packaging mistake into an export failure. So is a key that names one axis
+twice, such as `macos.single.double.debug`.
 
 ### The core Slice Is Asymmetric
 
