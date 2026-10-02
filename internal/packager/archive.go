@@ -32,23 +32,37 @@ const (
 	regularArchiveMode    os.FileMode = 0o644
 )
 
+// fileSource is a read handle for one file of the addon subtree: the open addon
+// root, the file's name within it, and the file the tree walk accepted there.
+//
+// Reads go through the root rather than through a bare path, so a path cannot
+// resolve outside the addon root however the tree changes under the packager.
+type fileSource struct {
+	root *os.Root
+	name string
+
+	// displayPath is the file's filesystem path, for diagnostics only.
+	displayPath string
+
+	// walkedInfo is the file the tree walk accepted, compared against the file
+	// actually opened.
+	walkedInfo fs.FileInfo
+}
+
 // archiveFile is one regular file going into a slice archive.
 //
-// Either sourcePath names a file to copy, or content holds bytes the packager
-// generated — which is how a .gdextension's partitioned core body reaches the
-// core archive without being written back into the author's working tree.
+// Either source names a file of the addon subtree to copy, or content holds
+// bytes the packager generated — which is how a .gdextension's partitioned core
+// body reaches the core archive without being written back into the author's
+// working tree.
 type archiveFile struct {
 	// archivePath is the entry name: the file's path relative to the addon root,
 	// with "/" separators. Archives hold the addon subtree unprefixed, so a
 	// consumer merges selected slices by extracting them into one root.
 	archivePath string
 
-	sourcePath string
-	content    []byte
-
-	// walkedInfo is the file the tree walk accepted at sourcePath, when there was
-	// one. It is compared against the file actually opened.
-	walkedInfo fs.FileInfo
+	source  fileSource
+	content []byte
 
 	// executable records whether the source file had any execute bit set.
 	executable bool
@@ -127,13 +141,13 @@ func writeArchiveEntry(writer *zip.Writer, file archiveFile) error {
 	if err != nil {
 		return installErrorf("adding %s to the archive: %s", file.archivePath, err)
 	}
-	if file.sourcePath == "" {
+	if file.source.root == nil {
 		if _, err := entry.Write(file.content); err != nil {
 			return installErrorf("writing %s into the archive: %s", file.archivePath, err)
 		}
 		return nil
 	}
-	source, err := openRegularFile(file.sourcePath, file.walkedInfo)
+	source, err := openRegularFile(file.source)
 	if err != nil {
 		return err
 	}
@@ -144,59 +158,55 @@ func writeArchiveEntry(writer *zip.Writer, file archiveFile) error {
 	return nil
 }
 
-// openRegularFile opens an archive source and refuses anything that is not a
-// regular file.
+// openRegularFile opens a file of the addon subtree and refuses anything that is
+// not the regular file the tree walk accepted.
 //
-// The tree walk already rejected every symlink and every irregular file it saw,
-// but it recorded paths rather than open file handles, so a path accepted then
-// is re-resolved here. Re-checking closes that gap: without it, a regular file
-// replaced by a symlink between the walk and the archive write would publish
-// whatever the link points at, which may be any readable file outside the addon
-// root. The open flag refuses the link where the platform has one, and the check
-// on the opened file refuses it everywhere.
-func openRegularFile(path string, walkedInfo fs.FileInfo) (*os.File, error) {
-	// Reported as a manifest failure, matching what the tree walk says about a
-	// symlink: whatever changed under the packager, a link in the subtree is the
-	// author's tree to fix.
-	link, err := os.Lstat(path)
+// Two rules apply, and they close different gaps. The open goes through the
+// addon root's handle, so every component is resolved inside that root and a
+// directory replaced by a symlink after the walk cannot make the path reach
+// outside it. The identity comparison then refuses a file that is no longer the
+// one the walk accepted at that name, which covers a swap that stays inside the
+// root and also reports an addon tree edited while it was being packaged rather
+// than publishing a release assembled from two states of it.
+func openRegularFile(source fileSource) (*os.File, error) {
+	file, err := source.root.Open(source.name)
 	if err != nil {
-		return nil, installErrorf("reading %s: %s", path, err)
-	}
-	if !link.Mode().IsRegular() {
-		return nil, manifestErrorf(
-			"%s is not a regular file; a slice archive carries regular files only", path,
-		)
-	}
-	file, err := os.OpenFile(path, os.O_RDONLY|openNoFollow, 0)
-	if err != nil {
-		return nil, installErrorf("reading %s: %s", path, err)
+		return nil, installErrorf("reading %s: %s", source.displayPath, err)
 	}
 	info, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
-		return nil, installErrorf("reading %s: %s", path, err)
+		return nil, installErrorf("reading %s: %s", source.displayPath, err)
 	}
 	if !info.Mode().IsRegular() {
 		_ = file.Close()
 		return nil, manifestErrorf(
-			"%s is no longer a regular file; a slice archive carries regular files only", path,
+			"%s is not a regular file; a slice archive carries regular files only", source.displayPath,
 		)
 	}
-	// The open flag and the two mode checks only ever see the path's last
-	// component, so an ancestor directory replaced by a symlink would resolve
-	// cleanly and hand back a file from somewhere else entirely. Comparing the
-	// opened file's identity with the one the walk accepted closes that, whatever
-	// component changed, and it also reports an addon tree edited while it was
-	// being packaged rather than publishing a release assembled from two states
-	// of the tree.
-	if walkedInfo != nil && !os.SameFile(walkedInfo, info) {
+	if source.walkedInfo != nil && !os.SameFile(source.walkedInfo, info) {
 		_ = file.Close()
 		return nil, manifestErrorf(
 			"%s changed while the addon was being packaged; it is no longer the file the tree walk accepted",
-			path,
+			source.displayPath,
 		)
 	}
 	return file, nil
+}
+
+// readRegularFile reads a file through the same symlink guard an archive source
+// goes through, for content the packager reads rather than copies.
+func readRegularFile(source fileSource) ([]byte, error) {
+	file, err := openRegularFile(source)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	content, err := io.ReadAll(file)
+	if err != nil {
+		return nil, installErrorf("reading %s: %s", source.displayPath, err)
+	}
+	return content, nil
 }
 
 // measureArchive returns an archive's SHA-256 digest as lowercase hex and its
@@ -215,29 +225,18 @@ func measureArchive(path string) (string, int64, error) {
 	if err != nil {
 		return "", 0, installErrorf("hashing archive %s: %s", path, err)
 	}
-	info, err := os.Stat(path)
+	// Taken from the descriptor the bytes were read from rather than by stat-ing
+	// the path again: the index pins a digest and a size that must describe one
+	// archive, and a second resolution of the path could measure a different file
+	// of the same length.
+	info, err := file.Stat()
 	if err != nil {
 		return "", 0, installErrorf("measuring archive %s: %s", path, err)
 	}
 	if info.Size() != size {
 		return "", 0, installErrorf(
-			"archive %s changed while it was hashed: %d bytes hashed, %d bytes on disk", path, size, info.Size(),
+			"archive %s changed while it was hashed: %d bytes hashed, %d bytes in the file", path, size, info.Size(),
 		)
 	}
 	return hex.EncodeToString(digest.Sum(nil)), size, nil
-}
-
-// readRegularFile reads a file through the same symlink guard an archive source
-// goes through, for content the packager reads rather than copies.
-func readRegularFile(path string, walkedInfo fs.FileInfo) ([]byte, error) {
-	file, err := openRegularFile(path, walkedInfo)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = file.Close() }()
-	content, err := io.ReadAll(file)
-	if err != nil {
-		return nil, installErrorf("reading %s: %s", path, err)
-	}
-	return content, nil
 }

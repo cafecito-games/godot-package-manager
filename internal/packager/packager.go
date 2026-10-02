@@ -102,10 +102,11 @@ func Package(options Options) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	tree, err := walkAddonTree(addonRoot)
+	tree, err := walkAddonTree(repositoryRoot, config.Package.AddonPath)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = tree.close() }()
 
 	// The addon's res:// root, which is both where the subtree sits in the
 	// author's own project and where a consumer installs it. requireInstallPath
@@ -237,7 +238,7 @@ func partitionExtensions(
 		// the file behind it is re-resolved here, so a .gdextension replaced by a
 		// link would otherwise partition a file from outside the addon root into
 		// the published core body.
-		content, err := readRegularFile(file.sourcePath, file.walkedInfo)
+		content, err := readRegularFile(tree.sourceAt(file.relativePath))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -535,13 +536,7 @@ func archiveFilesOf(
 			files = append(files, archiveFile{archivePath: relativePath, content: body})
 			continue
 		}
-		file := tree.fileAt(relativePath)
-		files = append(files, archiveFile{
-			archivePath: relativePath,
-			sourcePath:  file.sourcePath,
-			executable:  file.executable,
-			walkedInfo:  file.walkedInfo,
-		})
+		files = append(files, tree.archiveFileAt(relativePath))
 	}
 	return files, nil
 }
