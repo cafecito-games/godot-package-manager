@@ -230,3 +230,49 @@ func TestAFailedLockWriteLeavesNothingVouchedFor(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, callsBefore+1, calls)
 }
+
+// TestAFailedStateInvalidationRemovesTheFetchedTree pins that the fetched tree
+// is removed on every path out of the loop, as the Fetcher contract requires of
+// its caller. A merged slice set or a git checkout can be large, and leaving one
+// in the system temporary directory is a leak the user never sees.
+func TestAFailedStateInvalidationRemovesTheFetchedTree(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("a read-only directory does not constrain root")
+	}
+	projectRoot := t.TempDir()
+	stateDir := filepath.Join(projectRoot, "state")
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	statePath := filepath.Join(stateDir, project.StateFileName)
+
+	// A record to invalidate, and then a directory the atomic state write
+	// cannot create its temporary file in.
+	seed := &manifest.State{Addons: map[string]manifest.StateEntry{
+		"dlg": {ResolvedVersion: "1.0", Pin: "deadbeef"},
+	}}
+	require.NoError(t, seed.Save(statePath))
+	require.NoError(t, os.Chmod(stateDir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(stateDir, 0o755) })
+
+	var dirs []string
+	runner := &Runner{
+		AddonsDir: filepath.Join(projectRoot, "addons"),
+		LockPath:  filepath.Join(projectRoot, "addons.lock"),
+		StatePath: statePath,
+		FetcherFor: func(manifest.AddonSpec) (source.Fetcher, error) {
+			return slicePinFetcher{dirs: &dirs, result: source.FetchResult{
+				ResolvedVersion: "2.0",
+				Checksum:        "cafebabe",
+			}}, nil
+		},
+	}
+	addonManifest := &manifest.Manifest{Addons: map[string]manifest.AddonSpec{
+		"dlg": {Name: "dlg", Source: manifest.SourceArchive, URL: "u"},
+	}}
+	_, err := runner.InstallAddons(context.Background(), addonManifest, nil, ModeUpdate)
+	require.Error(t, err)
+	var manifestError *output.ManifestError
+	require.ErrorAs(t, err, &manifestError)
+	require.Len(t, dirs, 1)
+	_, statErr := os.Stat(dirs[0])
+	require.True(t, os.IsNotExist(statErr), "the fetched tree must not survive a failed state write")
+}

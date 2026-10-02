@@ -161,6 +161,7 @@ func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Mani
 		// succeeded and a lock write that then failed would leave new bytes on
 		// disk under an old pin that the old state record still matched.
 		if err := r.forgetState(state, spec.Name); err != nil {
+			_ = os.RemoveAll(fetched.Dir)
 			return nil, err
 		}
 
