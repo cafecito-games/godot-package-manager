@@ -529,3 +529,41 @@ func TestSupportedIndexFormatIsTheSingleDeclaredMaximum(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, SupportedIndexFormat, index.Format)
 }
+
+// TestIndexSectionKeyOwnership pins which platform-tagged keys a slice may
+// carry: a key with no architecture belongs to every architecture of its
+// platform, which is how Godot writes iOS and macOS keys, while a key naming an
+// architecture belongs only to that architecture's slice.
+func TestIndexSectionKeyOwnership(t *testing.T) {
+	for _, testCase := range []struct {
+		sliceKey string
+		entryKey string
+		accepted bool
+	}{
+		{sliceKey: "ios.arm64", entryKey: "ios.template_release", accepted: true},
+		{sliceKey: "ios.arm64", entryKey: "ios.template_release.arm64", accepted: true},
+		{sliceKey: "ios.arm64", entryKey: "ios", accepted: true},
+		{sliceKey: "macos", entryKey: "macos.template_debug", accepted: true},
+		{sliceKey: "macos", entryKey: "macos.universal", accepted: false},
+		{sliceKey: "macos.universal", entryKey: "macos.arm64", accepted: false},
+		{sliceKey: "ios.arm64", entryKey: "android.arm64", accepted: false},
+	} {
+		for _, section := range PartitionedSections() {
+			name := testCase.sliceKey + "/" + string(section) + "/" + testCase.entryKey
+			t.Run(name, func(t *testing.T) {
+				document := strings.Replace(validIndexTOML, `[slices."ios.arm64"]`, `[slices."`+testCase.sliceKey+`"]`, 1) +
+					"\n[slices.\"" + testCase.sliceKey + "\"." + string(section) + ".\"limboai.gdextension\"]\n" +
+					"\"" + testCase.entryKey + "\" = \"res://addons/limboai/bin/libai.a\"\n"
+				index, err := LoadIndex([]byte(document))
+				if testCase.accepted {
+					require.NoError(t, err)
+					require.NotNil(t, index)
+					return
+				}
+				require.Nil(t, index)
+				requireFetchError(t, err)
+				require.Contains(t, err.Error(), testCase.entryKey)
+			})
+		}
+	}
+}
