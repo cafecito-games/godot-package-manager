@@ -549,3 +549,55 @@ func TestSlicedMergeRejectsCaseVariantPathsAcrossSlices(t *testing.T) {
 	require.Contains(t, messages[0], `slices "ios.arm64" and "macos" ship "bin/Shared.so" and "bin/shared.so"`)
 	require.Contains(t, messages[0], "case-insensitive")
 }
+
+// TestSlicedFetchRejectsManifestArchiveChecksum pins that a `checksum` written
+// for an addon that turns out to be sliced is reported rather than ignored. A
+// sliced fetch has no single archive to compare it against, so honoring the
+// field is impossible and silently dropping it would leave an explicitly
+// written verification directive inert.
+//
+// It fires on both sliced sources, before anything is downloaded, and it is a
+// manifest failure: the remote content is fine, the declaration is wrong.
+func TestSlicedFetchRejectsManifestArchiveChecksum(t *testing.T) {
+	declared := strings.Repeat("ab", 32)
+
+	t.Run("github-release", func(t *testing.T) {
+		withHost(t, macOSHost)
+		fixture := packFixture(t)
+		_, temporaryRoot, err := fetchSlicedRelease(t, fixture,
+			manifest.AddonSpec{Checksum: declared}, nil)
+		requireManifestChecksumRejection(t, err, temporaryRoot)
+	})
+
+	t.Run("archive", func(t *testing.T) {
+		withHost(t, macOSHost)
+		temporaryRoot := t.TempDir()
+		t.Setenv("TMPDIR", temporaryRoot)
+		fixture := packFixture(t)
+		server := fixture.serveArchiveHost(t)
+		_, err := (&ArchiveFetcher{}).Fetch(context.Background(), manifest.AddonSpec{
+			Name:     fixtureAddonName,
+			Source:   manifest.SourceArchive,
+			URL:      server.URL + "/dist/whole-addon.zip",
+			Index:    server.URL + "/dist/" + slice.IndexFileName,
+			Version:  fixtureVersion,
+			Checksum: declared,
+		})
+		requireManifestChecksumRejection(t, err, temporaryRoot)
+	})
+}
+
+func requireManifestChecksumRejection(t *testing.T, err error, temporaryRoot string) {
+	t.Helper()
+	require.Error(t, err)
+	var manifestError *output.ManifestError
+	require.ErrorAs(t, err, &manifestError)
+	require.Equal(t, output.ExitManifest, output.CodeFor(err))
+	require.Contains(t, err.Error(), `addon "sliced" declares a checksum`)
+	require.Contains(t, err.Error(), "pins one archive")
+	require.Contains(t, err.Error(), "publishes several")
+	require.Contains(t, err.Error(), "index_sha256")
+	// No staging directory and no downloaded archive: the declaration is
+	// rejected before any slice is fetched, not after.
+	requireTemporaryRootEmpty(t, temporaryRoot)
+}

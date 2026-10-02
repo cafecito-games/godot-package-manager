@@ -90,6 +90,9 @@ type slicedFetcher struct {
 // fetch. On any failure nothing is left behind: the staging directory is removed
 // and every downloaded archive is a temp file removed as its slice completes.
 func (f *slicedFetcher) fetch(ctx context.Context, spec manifest.AddonSpec, indexURL string) (FetchResult, error) {
+	if err := requireNoArchiveChecksum(spec); err != nil {
+		return FetchResult{}, err
+	}
 	indexBytes, err := download(ctx, f.client, indexURL, f.header, f.maxBytes)
 	if err != nil {
 		return FetchResult{}, &output.FetchError{Err: fmt.Errorf(
@@ -143,6 +146,30 @@ func (f *slicedFetcher) fetch(ctx context.Context, spec manifest.AddonSpec, inde
 		InstalledSlices: sortedSliceIDs(selection.Slices),
 		Diagnostics:     diagnostics,
 	}, nil
+}
+
+// requireNoArchiveChecksum rejects a manifest `checksum` on an addon that turns
+// out to be sliced, before anything is downloaded.
+//
+// A sliced fetch reports no single archive checksum, because there is no single
+// archive, so a declared one would be compared against nothing and silently pin
+// nothing at all. An explicitly written verification directive going inert is
+// worse than being told it does not apply here.
+//
+// It is an *output.ManifestError rather than an *output.FetchError: the remote
+// content is fine and the user's declaration is what is wrong. The field is not
+// reinterpreted as the index's checksum either — silently redefining what a
+// field means is worse than rejecting it — and the index is already pinned, by
+// the lockfile's index_sha256.
+func requireNoArchiveChecksum(spec manifest.AddonSpec) error {
+	if spec.Checksum == "" {
+		return nil
+	}
+	return &output.ManifestError{Err: fmt.Errorf(
+		"addon %q declares a checksum, but checksum pins one archive and a sliced addon publishes several, "+
+			"so it has none to pin; the %s that names them is pinned by the lockfile's index_sha256 instead, "+
+			"so remove checksum from this addon",
+		spec.Name, slice.IndexFileName)}
 }
 
 // mergeSlices downloads, verifies, and extracts each needed slice into staging.
