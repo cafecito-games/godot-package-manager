@@ -70,16 +70,11 @@ type addonTree struct {
 //
 // The caller owns closing the returned tree.
 func walkAddonTree(repositoryRoot, addonPath string) (*addonTree, error) {
+	root, err := openAddonRoot(repositoryRoot, addonPath)
+	if err != nil {
+		return nil, err
+	}
 	path := filepath.Join(repositoryRoot, filepath.FromSlash(addonPath))
-	repository, err := os.OpenRoot(repositoryRoot)
-	if err != nil {
-		return nil, manifestErrorf("opening the addon repository at %s: %s", repositoryRoot, err)
-	}
-	defer func() { _ = repository.Close() }()
-	root, err := repository.OpenRoot(addonPath)
-	if err != nil {
-		return nil, manifestErrorf("opening the addon subtree at %s: %s", path, err)
-	}
 	tree := &addonTree{path: path, root: root, positions: map[string]int{}}
 	if err := tree.walk(); err != nil {
 		_ = root.Close()
@@ -143,6 +138,89 @@ func (tree *addonTree) walk() error {
 		return manifestErrorf("the addon subtree at %s holds no files, so there is nothing to package", tree.path)
 	}
 	return nil
+}
+
+// openAddonRoot opens the addon subtree, descending one component of addonPath
+// at a time from the repository root.
+//
+// Each component is lstat-ed through its parent's handle, opened through that
+// same handle, and then the opened directory's identity is compared with the one
+// that was lstat-ed. Checking the whole path first and opening it afterwards
+// would leave the two describing different directories: a component replaced by
+// a symlink in between is followed by the open, and the walk that follows cannot
+// tell that its root was reached through a link. Comparing identities at every
+// step reports such a replacement instead of packaging a different subtree.
+//
+// addonPath is already known to be a clean relative path, so it has no "." or
+// ".." component; "." names the repository root itself, which is what the tests
+// of this package use.
+func openAddonRoot(repositoryRoot, addonPath string) (*os.Root, error) {
+	current, err := os.OpenRoot(repositoryRoot)
+	if err != nil {
+		return nil, manifestErrorf("opening the addon repository at %s: %s", repositoryRoot, err)
+	}
+	if addonPath == "." {
+		return current, nil
+	}
+	traversed := repositoryRoot
+	for _, component := range strings.Split(addonPath, "/") {
+		traversed = filepath.Join(traversed, component)
+		child, err := descendInto(current, component, addonPath, traversed)
+		_ = current.Close()
+		if err != nil {
+			return nil, err
+		}
+		current = child
+	}
+	return current, nil
+}
+
+// descendInto opens one component of addon_path through its parent's handle and
+// confirms that the directory it opened is the one it checked.
+func descendInto(parent *os.Root, component, addonPath, traversed string) (*os.Root, error) {
+	link, err := parent.Lstat(component)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, manifestErrorf("[package] addon_path %q names %s, which does not exist", addonPath, traversed)
+		}
+		return nil, manifestErrorf("[package] addon_path %q: reading %s: %s", addonPath, traversed, err)
+	}
+	if link.Mode()&os.ModeSymlink != 0 {
+		return nil, manifestErrorf(
+			"[package] addon_path %q passes through the symlink %s; the addon subtree is read as it sits in the repository",
+			addonPath, traversed,
+		)
+	}
+	if !link.IsDir() {
+		return nil, manifestErrorf("[package] addon_path %q names %s, which is not a directory", addonPath, traversed)
+	}
+	child, err := parent.OpenRoot(component)
+	if err != nil {
+		return nil, manifestErrorf("[package] addon_path %q: opening %s: %s", addonPath, traversed, err)
+	}
+	opened, err := child.Stat(".")
+	if err != nil {
+		_ = child.Close()
+		return nil, manifestErrorf("[package] addon_path %q: reading %s: %s", addonPath, traversed, err)
+	}
+	if !os.SameFile(link, opened) {
+		_ = child.Close()
+		return nil, manifestErrorf(
+			"[package] addon_path %q: %s changed while the addon was being packaged; it is no longer the directory that was checked",
+			addonPath, traversed,
+		)
+	}
+	return child, nil
+}
+
+// addonInfo returns the addon root's own file information, taken through the
+// pinned root handle rather than by resolving its path again.
+func (tree *addonTree) addonInfo() (fs.FileInfo, error) {
+	info, err := tree.root.Stat(".")
+	if err != nil {
+		return nil, installErrorf("reading the addon subtree %s: %s", tree.path, err)
+	}
+	return info, nil
 }
 
 // close releases the addon root handle.

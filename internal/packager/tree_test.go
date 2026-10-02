@@ -103,3 +103,33 @@ func archiveFilesFor(tree *addonTree, relativePaths []string) []archiveFile {
 	}
 	return files
 }
+
+func TestOpenAddonRootRefusesASymlinkedComponent(t *testing.T) {
+	repository := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(repository, "real", "addon"), 0o755))
+	require.NoError(t, os.Symlink(filepath.Join(repository, "real"), filepath.Join(repository, "addons")))
+
+	_, err := openAddonRoot(repository, "addons/addon")
+	require.Error(t, err)
+	var manifestError *output.ManifestError
+	require.ErrorAs(t, err, &manifestError)
+	require.Contains(t, err.Error(), "symlink")
+}
+
+func TestOpenAddonRootReadsTheSubtreeThroughThePinnedHandle(t *testing.T) {
+	repository := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(repository, "addons", "addon"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repository, "addons", "addon", "plugin.gd"), []byte("a"), 0o644))
+	// A directory elsewhere in the repository that addon_path must not reach.
+	require.NoError(t, os.MkdirAll(filepath.Join(repository, "private"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repository, "private", "key.pem"), []byte("secret"), 0o600))
+
+	tree, err := walkAddonTree(repository, "addons/addon")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, tree.close()) }()
+	require.Equal(t, []string{"plugin.gd"}, tree.paths())
+
+	// Nothing outside the pinned root is reachable through it, whatever the name.
+	_, err = tree.root.Open("../private/key.pem")
+	require.Error(t, err)
+}

@@ -2,6 +2,7 @@ package packager
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,10 +99,6 @@ func Package(options Options) (*Result, error) {
 	if err := requireInstallPath(config.Package.Name, config.Package.AddonPath); err != nil {
 		return nil, manifestErrorf("%s: %s", configPath, err)
 	}
-	addonRoot, err := resolveAddonRoot(repositoryRoot, config.Package.AddonPath)
-	if err != nil {
-		return nil, err
-	}
 	tree, err := walkAddonTree(repositoryRoot, config.Package.AddonPath)
 	if err != nil {
 		return nil, err
@@ -146,7 +143,7 @@ func Package(options Options) (*Result, error) {
 		return nil, err
 	}
 
-	outputDirectory, err := prepareOutputDirectory(repositoryRoot, options.OutputDirectory, addonRoot)
+	outputDirectory, err := prepareOutputDirectory(repositoryRoot, options.OutputDirectory, tree)
 	if err != nil {
 		return nil, err
 	}
@@ -619,37 +616,6 @@ func archiveFileName(name, version string, id slice.SliceID) string {
 	return fmt.Sprintf("%s-%s-%s.zip", name, version, id)
 }
 
-// resolveAddonRoot locates the addon subtree and refuses one that is not a real
-// directory inside the repository.
-//
-// Every component is checked with os.Lstat rather than os.Stat, so a symlink
-// anywhere along addon_path is refused before the tree is walked. A symlinked
-// addon root would make the containment rule meaningless: the files archived
-// would come from wherever the link points.
-func resolveAddonRoot(repositoryRoot, addonPath string) (string, error) {
-	current := repositoryRoot
-	for _, component := range strings.Split(addonPath, "/") {
-		current = filepath.Join(current, component)
-		info, err := os.Lstat(current)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return "", manifestErrorf("[package] addon_path %q names %s, which does not exist", addonPath, current)
-			}
-			return "", manifestErrorf("[package] addon_path %q: reading %s: %s", addonPath, current, err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return "", manifestErrorf(
-				"[package] addon_path %q passes through the symlink %s; the addon subtree is read as it sits in the repository",
-				addonPath, current,
-			)
-		}
-		if !info.IsDir() {
-			return "", manifestErrorf("[package] addon_path %q names %s, which is not a directory", addonPath, current)
-		}
-	}
-	return current, nil
-}
-
 // prepareOutputDirectory resolves --out and creates it.
 //
 // A relative path is resolved against the repository root rather than the
@@ -657,7 +623,7 @@ func resolveAddonRoot(repositoryRoot, addonPath string) (string, error) {
 // packaged. A directory inside the addon subtree is refused, and a directory
 // that cannot be created is an *output.InstallError: the config and the tree
 // were fine and the filesystem was not.
-func prepareOutputDirectory(repositoryRoot, outputDirectory, addonRoot string) (string, error) {
+func prepareOutputDirectory(repositoryRoot, outputDirectory string, tree *addonTree) (string, error) {
 	if outputDirectory == "" {
 		outputDirectory = DefaultOutputDirectory
 	}
@@ -665,7 +631,7 @@ func prepareOutputDirectory(repositoryRoot, outputDirectory, addonRoot string) (
 		outputDirectory = filepath.Join(repositoryRoot, outputDirectory)
 	}
 	outputDirectory = filepath.Clean(outputDirectory)
-	if err := requireOutsideAddonSubtree(outputDirectory, addonRoot); err != nil {
+	if err := requireOutsideAddonSubtree(outputDirectory, tree.path); err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(outputDirectory, 0o755); err != nil {
@@ -677,7 +643,11 @@ func prepareOutputDirectory(repositoryRoot, outputDirectory, addonRoot string) (
 	// only reaches the addon subtree indirectly — through a symlinked ancestor,
 	// through a hard link, or through a case alias on a case-insensitive
 	// filesystem — none of which a string comparison can see.
-	if err := requireIdentityOutsideAddonSubtree(outputDirectory, addonRoot); err != nil {
+	addonInfo, err := tree.addonInfo()
+	if err != nil {
+		return "", err
+	}
+	if err := requireIdentityOutsideAddonSubtree(outputDirectory, tree.path, addonInfo); err != nil {
 		return "", err
 	}
 	return outputDirectory, nil
@@ -707,11 +677,7 @@ func requireOutsideAddonSubtree(outputDirectory, addonRoot string) error {
 // It walks from the output directory up to the filesystem root, so a path whose
 // spelling differs from the addon root's — a different case, a symlinked
 // component, a hard-linked directory — is still recognized as being inside it.
-func requireIdentityOutsideAddonSubtree(outputDirectory, addonRoot string) error {
-	addonInfo, err := os.Stat(addonRoot)
-	if err != nil {
-		return installErrorf("reading the addon subtree %s: %s", addonRoot, err)
-	}
+func requireIdentityOutsideAddonSubtree(outputDirectory, addonRoot string, addonInfo fs.FileInfo) error {
 	// Resolved before the ascent, not during it. Ascending the path as written
 	// would compare the right directory at the bottom and the wrong ones above
 	// it, so an output directory symlinked straight to a child of the addon root
