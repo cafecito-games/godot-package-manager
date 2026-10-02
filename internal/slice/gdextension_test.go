@@ -201,7 +201,7 @@ func TestExtensionReassemblyOfOneSliceOmitsEveryOtherPlatform(t *testing.T) {
 	require.NoError(t, err)
 
 	libraries := pathsOf(t, reassembled)["libraries"]
-	require.Equal(t, map[string]string{
+	require.Equal(t, ExtensionEntryTable[string]{
 		"ios.debug":   "res://addons/terrabrush/bin/libterrabrush.ios.debug.a",
 		"ios.release": "res://addons/terrabrush/bin/libterrabrush.ios.release.a",
 	}, libraries)
@@ -356,7 +356,7 @@ linux.release.x86_64 = "res://addons/demo/bin/libsecond.linux.so"
 
 	firstReassembled, err := ReassembleExtension(firstCore, firstRemoved, allSlices(firstRemoved))
 	require.NoError(t, err)
-	require.Equal(t, map[string]string{"ios.debug": "res://addons/demo/bin/libfirst.ios.xcframework"},
+	require.Equal(t, ExtensionEntryTable[string]{"ios.debug": "res://addons/demo/bin/libfirst.ios.xcframework"},
 		pathsOf(t, firstReassembled)["libraries"])
 	require.Contains(t, string(firstReassembled), "first_init")
 
@@ -483,7 +483,7 @@ func TestExtensionPartitionHandlesEverySectionOfTheVocabulary(t *testing.T) {
 
 	reassembled, err := ReassembleExtension(core, removed, allSlices(removed))
 	require.NoError(t, err)
-	require.Equal(t, map[string]string{
+	require.Equal(t, ExtensionEntryTable[string]{
 		"macos.debug": fmt.Sprintf("res://addons/demo/bin/%s.framework", SectionLibraries),
 	}, pathsOf(t, reassembled)[string(SectionLibraries)])
 	require.Equal(t, map[string]ExtensionDependencyTargets{
@@ -925,15 +925,15 @@ func allSlices(entries map[SliceID]ExtensionEntries) []SliceID {
 // Dictionary spelling, which is in contract with emission being canonical, and
 // what the round trip must preserve is the dependency-path-to-destination
 // mapping rather than the punctuation the author chose for it.
-func sectionsOf(t *testing.T, content []byte) map[string]map[string]string {
+func sectionsOf(t *testing.T, content []byte) map[string]ExtensionEntryTable[string] {
 	t.Helper()
 	file := parseFixture(t, content)
 
-	sections := map[string]map[string]string{}
+	sections := map[string]ExtensionEntryTable[string]{}
 	for _, section := range file.Sections {
 		table := sections[section.Name]
 		if table == nil {
-			table = map[string]string{}
+			table = ExtensionEntryTable[string]{}
 			sections[section.Name] = table
 		}
 		for _, statement := range section.Statements {
@@ -1013,11 +1013,11 @@ func targetsOf(t *testing.T, content []byte) map[string]ExtensionDependencyTarge
 // value, for the tests that compare against a res:// path rather than against a
 // Variant's spelling. An entry holding another Variant type, such as
 // [configuration]'s reloadable, is not a path and is left out.
-func pathsOf(t *testing.T, content []byte) map[string]map[string]string {
+func pathsOf(t *testing.T, content []byte) map[string]ExtensionEntryTable[string] {
 	t.Helper()
-	paths := map[string]map[string]string{}
+	paths := map[string]ExtensionEntryTable[string]{}
 	for _, section := range parseFixture(t, content).Sections {
-		table := map[string]string{}
+		table := ExtensionEntryTable[string]{}
 		for _, statement := range section.Statements {
 			assignment, isAssignment := statement.(*ast.Assignment)
 			if !isAssignment {
@@ -1418,4 +1418,426 @@ func TestExtensionPartitionCarriesDictionaryDependencyDestinations(t *testing.T)
 		"res://addons/limboai/bin/liblimboai.ios.template_debug.xcframework",
 		removed[iosSlice].Libraries["ios.debug"],
 	)
+}
+
+// TestExtensionPartitionIsFailClosedOnDependencyDictionaries asserts every row
+// of the fail-closed contract that is specific to a [dependencies] value, which
+// is the one section whose value is a Godot Dictionary rather than a single
+// res:// path. The rows shared with [libraries] are asserted for both sections
+// by TestExtensionPartitionIsFailClosedPerSection.
+func TestExtensionPartitionIsFailClosedOnDependencyDictionaries(t *testing.T) {
+	for _, row := range []struct {
+		name            string
+		body            string
+		expectedMessage []string
+	}{
+		{
+			name:            "dictionary is empty",
+			body:            `ios.release = {}`,
+			expectedMessage: []string{"ios.release", "names no dependency"},
+		},
+		{
+			name:            "dictionary key is not a string",
+			body:            `ios.release = { 42 : "" }`,
+			expectedMessage: []string{"dependency path", "number"},
+		},
+		{
+			name:            "dictionary key is a StringName",
+			body:            `ios.release = { &"res://addons/demo/bin/libsupport.a" : "" }`,
+			expectedMessage: []string{"dependency path", "StringName"},
+		},
+		{
+			name:            "dictionary key is not a resource path",
+			body:            `ios.release = { "bin/libsupport.a" : "" }`,
+			expectedMessage: []string{"bin/libsupport.a", "res://"},
+		},
+		{
+			name:            "dictionary key traverses out of the addon",
+			body:            `ios.release = { "res://addons/demo/../other/libsupport.a" : "" }`,
+			expectedMessage: []string{"must not escape the addon root"},
+		},
+		{
+			name:            "dictionary key is outside the addon root",
+			body:            `ios.release = { "res://addons/other/bin/libsupport.a" : "" }`,
+			expectedMessage: []string{"outside the addon root", demoAddonRoot},
+		},
+		{
+			name:            "dictionary key is not in its simplest form",
+			body:            `ios.release = { "res://addons/demo/./bin/libsupport.a" : "" }`,
+			expectedMessage: []string{"simplest form"},
+		},
+		{
+			name:            "dictionary key uses windows separators",
+			body:            `ios.release = { "res://addons/demo\\bin\\libsupport.a" : "" }`,
+			expectedMessage: []string{"separators"},
+		},
+		{
+			name:            "dictionary destination is not a string",
+			body:            `ios.release = { "res://addons/demo/bin/libsupport.a" : 42 }`,
+			expectedMessage: []string{"destination of dependency", "number"},
+		},
+		{
+			name:            "dictionary destination is a NodePath",
+			body:            `ios.release = { "res://addons/demo/bin/libsupport.a" : ^"Frameworks" }`,
+			expectedMessage: []string{"destination of dependency", "NodePath"},
+		},
+		{
+			name:            "dictionary destination is absolute",
+			body:            `ios.release = { "res://addons/demo/bin/libsupport.a" : "/usr/local/lib" }`,
+			expectedMessage: []string{"destination", "must be relative"},
+		},
+		{
+			name:            "dictionary destination traverses",
+			body:            `ios.release = { "res://addons/demo/bin/libsupport.a" : "../elsewhere" }`,
+			expectedMessage: []string{"destination", "must not escape"},
+		},
+		{
+			name:            "dictionary destination is not in its simplest form",
+			body:            `ios.release = { "res://addons/demo/bin/libsupport.a" : "./Frameworks" }`,
+			expectedMessage: []string{"destination", "simplest form"},
+		},
+		{
+			name:            "dictionary destination uses windows separators",
+			body:            `ios.release = { "res://addons/demo/bin/libsupport.a" : "libs\\arm64" }`,
+			expectedMessage: []string{"destination", "separators"},
+		},
+		{
+			name:            "dictionary destination names a host drive",
+			body:            `ios.release = { "res://addons/demo/bin/libsupport.a" : "C:/libs" }`,
+			expectedMessage: []string{"destination", "must be relative"},
+		},
+		{
+			name:            "dictionary destination is a resource path",
+			body:            `ios.release = { "res://addons/demo/bin/libsupport.a" : "res://addons/demo/libs" }`,
+			expectedMessage: []string{"destination", "relative to the export directory"},
+		},
+		{
+			name:            "dictionary destination contains a control character",
+			body:            "ios.release = { \"res://addons/demo/bin/libsupport.a\" : \"libs\\u0001\" }",
+			expectedMessage: []string{"destination", "control character"},
+		},
+		{
+			name:            "duplicate dictionary key",
+			body:            `ios.release = { "res://addons/demo/bin/libsupport.a" : "", "res://addons/demo/bin/libsupport.a" : "Frameworks" }`,
+			expectedMessage: []string{"libsupport.a", "more than once"},
+		},
+		{
+			name:            "value is an array",
+			body:            `ios.release = [ "res://addons/demo/bin/libsupport.a" ]`,
+			expectedMessage: []string{"array", "export destinations"},
+		},
+		{
+			name:            "value is a boolean",
+			body:            `ios.release = true`,
+			expectedMessage: []string{"boolean", "export destinations"},
+		},
+		{
+			name:            "value is null",
+			body:            `ios.release = null`,
+			expectedMessage: []string{"null", "export destinations"},
+		},
+		{
+			name:            "value is a bare identifier",
+			body:            `ios.release = libsupport`,
+			expectedMessage: []string{"bare identifier", "export destinations"},
+		},
+		{
+			name:            "value is a constructor call",
+			body:            `ios.release = Vector2(1, 2)`,
+			expectedMessage: []string{"constructor call", "export destinations"},
+		},
+		{
+			name:            "typed dictionary declares a non-string key type",
+			body:            `ios.release = Dictionary[int, String]({ 1 : "" })`,
+			expectedMessage: []string{"int", "export destinations"},
+		},
+		{
+			name:            "typed dictionary declares a non-string value type",
+			body:            `ios.release = Dictionary[String, int]({ "res://addons/demo/bin/libsupport.a" : 1 })`,
+			expectedMessage: []string{"int", "export destinations"},
+		},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			content := fmt.Sprintf(
+				"[configuration]\n\nentry_symbol = \"demo_init\"\n\n[%s]\n\n%s\n", SectionDependencies, row.body,
+			)
+			core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+			requireManifestError(t, err, row.expectedMessage...)
+			require.Nil(t, core, "a rejected .gdextension must yield no core body")
+			require.Nil(t, removed, "a rejected .gdextension must yield no entries")
+		})
+	}
+}
+
+// TestExtensionPartitionNormalizesABareStringDependency pins the one deliberate
+// behavior change of the nested schema. Godot accepts both a bare res:// path and
+// a Dictionary as a [dependencies] value, and both stay accepted, but they
+// converge at the parser boundary into the single-entry Dictionary with an empty
+// destination that is the bare string's Godot equivalent. That keeps exactly one
+// representation in the Go type and in the index, with no "which spelling was it"
+// flag, and its consequence is that reassembly always emits the Dictionary
+// spelling.
+//
+// The first emission is therefore not byte-identical to a bare-string input, by
+// design: emission is already canonical, which is why a BOM and CRLF endings are
+// normalized away rather than reproduced. From the second emission onward it is
+// byte-stable, because the normalization is total and one-way.
+func TestExtensionPartitionNormalizesABareStringDependency(t *testing.T) {
+	const content = `[configuration]
+
+entry_symbol = "demo_init"
+
+[dependencies]
+
+macos.debug = "res://addons/demo/bin/libsupport.dylib"
+`
+	core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+	require.NoError(t, err)
+	require.Equal(t, ExtensionEntryTable[ExtensionDependencyTargets]{
+		"macos.debug": {"res://addons/demo/bin/libsupport.dylib": ""},
+	}, removed[SliceID{Platform: "macos"}].Dependencies)
+
+	reassembled, err := ReassembleExtension(core, removed, allSlices(removed))
+	require.NoError(t, err)
+	require.Equal(t,
+		"[configuration]\n"+
+			"entry_symbol=\"demo_init\"\n"+
+			"\n"+
+			"[dependencies]\n"+
+			"macos.debug={\"res://addons/demo/bin/libsupport.dylib\": \"\"}\n",
+		string(reassembled),
+		"reassembly emits the dictionary spelling, which is the single representation")
+
+	// Byte-stable from the second emission onward.
+	secondCore, secondRemoved, err := PartitionExtension(reassembled, demoAddonRoot)
+	require.NoError(t, err)
+	require.Equal(t, string(core), string(secondCore))
+	require.Equal(t, removed, secondRemoved)
+	again, err := ReassembleExtension(secondCore, secondRemoved, allSlices(secondRemoved))
+	require.NoError(t, err)
+	require.Equal(t, string(reassembled), string(again))
+}
+
+// TestExtensionPartitionAcceptsATypedDictionaryDependency covers Godot's
+// Dictionary[String, String]({...}) serialization of the same value.
+func TestExtensionPartitionAcceptsATypedDictionaryDependency(t *testing.T) {
+	const content = `[configuration]
+
+entry_symbol = "demo_init"
+
+[dependencies]
+
+macos.debug = Dictionary[String, String]({ "res://addons/demo/bin/libsupport.dylib" : "Frameworks" })
+`
+	_, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+	require.NoError(t, err)
+	require.Equal(t, ExtensionEntryTable[ExtensionDependencyTargets]{
+		"macos.debug": {"res://addons/demo/bin/libsupport.dylib": "Frameworks"},
+	}, removed[SliceID{Platform: "macos"}].Dependencies)
+}
+
+// TestExtensionPartitionAcceptsADependencyNamingSeveralFiles covers an entry that
+// ships more than one file beside one platform's library, each into its own
+// export subdirectory, and pins that the emitted dictionary sorts its dependency
+// paths so two machines write identical bytes.
+func TestExtensionPartitionAcceptsADependencyNamingSeveralFiles(t *testing.T) {
+	const content = `[configuration]
+
+entry_symbol = "demo_init"
+
+[dependencies]
+
+macos.debug = { "res://addons/demo/bin/libz.dylib" : "libs", "res://addons/demo/bin/liba.dylib" : "" }
+`
+	core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+	require.NoError(t, err)
+	require.Equal(t, ExtensionDependencyTargets{
+		"res://addons/demo/bin/liba.dylib": "",
+		"res://addons/demo/bin/libz.dylib": "libs",
+	}, removed[SliceID{Platform: "macos"}].Dependencies["macos.debug"])
+
+	reassembled, err := ReassembleExtension(core, removed, allSlices(removed))
+	require.NoError(t, err)
+	require.Contains(t, string(reassembled),
+		`macos.debug={"res://addons/demo/bin/liba.dylib": "", "res://addons/demo/bin/libz.dylib": "libs"}`,
+		"a dependency entry's paths are emitted in ascending order")
+}
+
+// TestExtensionPartitionDropsACommentInsideADependencyDictionary pins the one
+// place a comment is not preserved: the index carries no comment at the depth of
+// a dependency path, so a comment among a Dictionary's items is accepted and
+// dropped. A partitioned section's own comments keep their separate treatment in
+// the core body.
+func TestExtensionPartitionDropsACommentInsideADependencyDictionary(t *testing.T) {
+	const content = `[dependencies]
+
+macos.debug = {
+	# the support library
+	"res://addons/demo/bin/libsupport.dylib" : ""
+}
+`
+	_, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+	require.NoError(t, err)
+	require.Equal(t, ExtensionDependencyTargets{"res://addons/demo/bin/libsupport.dylib": ""},
+		removed[SliceID{Platform: "macos"}].Dependencies["macos.debug"])
+}
+
+// TestExtensionReassemblyIsFailClosedOnDependencyTargets asserts the reassembly
+// rows specific to a dependency Dictionary. LoadIndex already rejects each of
+// these, and reassembly re-checks because an Index may also be assembled in
+// memory by a producer rather than loaded from bytes.
+func TestExtensionReassemblyIsFailClosedOnDependencyTargets(t *testing.T) {
+	core, _, err := PartitionExtension([]byte(bothSectionsExtension), demoAddonRoot)
+	require.NoError(t, err)
+	macosSlice := SliceID{Platform: "macos"}
+
+	for _, row := range []struct {
+		name            string
+		targets         ExtensionDependencyTargets
+		expectedMessage []string
+	}{
+		{
+			name:            "the dictionary is empty",
+			targets:         ExtensionDependencyTargets{},
+			expectedMessage: []string{"macos.debug", "empty"},
+		},
+		{
+			name:            "a dependency path is not a res:// path",
+			targets:         ExtensionDependencyTargets{"bin/support.dylib": ""},
+			expectedMessage: []string{"bin/support.dylib", "res://"},
+		},
+		{
+			name:            "a dependency path traverses",
+			targets:         ExtensionDependencyTargets{"res://addons/demo/../other/support.dylib": ""},
+			expectedMessage: []string{"must not escape"},
+		},
+		{
+			name:            "a dependency path would not survive being written back",
+			targets:         ExtensionDependencyTargets{`res://addons/demo/bin/lib"support.dylib`: ""},
+			expectedMessage: []string{"must not contain a quote"},
+		},
+		{
+			name:            "a destination traverses",
+			targets:         ExtensionDependencyTargets{"res://addons/demo/bin/support.dylib": "../elsewhere"},
+			expectedMessage: []string{"destination", "must not escape"},
+		},
+		{
+			name:            "a destination is a res:// path",
+			targets:         ExtensionDependencyTargets{"res://addons/demo/bin/support.dylib": "res://addons/demo/libs"},
+			expectedMessage: []string{"destination", "relative to the export directory"},
+		},
+		{
+			name:            "a destination would not survive being written back",
+			targets:         ExtensionDependencyTargets{"res://addons/demo/bin/support.dylib": `libs"arm64`},
+			expectedMessage: []string{"destination", "must not contain a quote"},
+		},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			entries := map[SliceID]ExtensionEntries{
+				macosSlice: {Dependencies: ExtensionEntryTable[ExtensionDependencyTargets]{
+					"macos.debug": row.targets,
+				}},
+			}
+			reassembled, err := ReassembleExtension(core, entries, []SliceID{CoreSliceID(), macosSlice})
+			require.Nil(t, reassembled, "a rejected reassembly must yield no file")
+			require.Error(t, err)
+			var fetchError *output.FetchError
+			require.True(t, errors.As(err, &fetchError),
+				"a reassembly failure is remote content being wrong, so it is a FetchError: got %T", err)
+			require.Equal(t, output.ExitFetch, output.CodeFor(err))
+			require.Contains(t, err.Error(), string(SectionDependencies))
+			for _, fragment := range row.expectedMessage {
+				require.Contains(t, err.Error(), fragment)
+			}
+		})
+	}
+}
+
+// TestExtensionDictionaryDependenciesSurviveTheWholeIndexPath is the end-to-end
+// assertion the nested schema exists for: a real producer's .gdextension with
+// Godot Dictionary [dependencies] values goes through partition, straight into an
+// IndexSlice with no conversion, through Save and LoadIndex, and back out of
+// ReassembleExtension still naming every dependency and every export
+// destination.
+func TestExtensionDictionaryDependenciesSurviveTheWholeIndexPath(t *testing.T) {
+	original, err := os.ReadFile("testdata/limboai.gdextension")
+	require.NoError(t, err)
+
+	const addonRoot = "res://addons/limboai"
+	const extensionPath = "limboai.gdextension"
+	core, removed, err := PartitionExtension(original, addonRoot)
+	require.NoError(t, err)
+
+	index := &Index{
+		Format:  SupportedIndexFormat,
+		Name:    "limboai",
+		Version: "1.4.0",
+		Slices: map[string]*IndexSlice{
+			CorePlatform: {File: "limboai-core.zip", SHA256: strings.Repeat("a", 64), Size: 1},
+		},
+	}
+	for id, entries := range removed {
+		indexSlice := &IndexSlice{
+			File:   "limboai-" + strings.ReplaceAll(id.String(), ".", "-") + ".zip",
+			SHA256: strings.Repeat("b", 64),
+			Size:   2,
+		}
+		if entries.Libraries != nil {
+			indexSlice.Libraries = ExtensionSectionTable[string]{extensionPath: entries.Libraries}
+		}
+		if entries.Dependencies != nil {
+			indexSlice.Dependencies = ExtensionSectionTable[ExtensionDependencyTargets]{
+				extensionPath: entries.Dependencies,
+			}
+		}
+		index.Slices[id.String()] = indexSlice
+	}
+
+	path := filepath.Join(t.TempDir(), "gpm-index.toml")
+	require.NoError(t, index.Save(path))
+	saved, err := os.ReadFile(path)
+	require.NoError(t, err)
+	loaded, err := LoadIndex(saved)
+	require.NoError(t, err)
+
+	reloaded := map[SliceID]ExtensionEntries{}
+	for key, indexSlice := range loaded.Slices {
+		id, err := ParseSliceID(key)
+		require.NoError(t, err)
+		entries := ExtensionEntries{
+			Libraries:    indexSlice.Libraries[extensionPath],
+			Dependencies: indexSlice.Dependencies[extensionPath],
+		}
+		if entries.Libraries == nil && entries.Dependencies == nil {
+			continue
+		}
+		reloaded[id] = entries
+	}
+	require.Equal(t, removed, reloaded, "a partition result must survive the index unchanged")
+
+	reassembled, err := ReassembleExtension(core, reloaded, allSlices(reloaded))
+	require.NoError(t, err)
+	require.Equal(t, targetsOf(t, original), targetsOf(t, reassembled),
+		"every dependency and every export destination must survive the whole path")
+	require.Equal(t, sectionsOf(t, original), sectionsOf(t, reassembled))
+}
+
+// TestExtensionReassemblyOfOneSliceKeepsItsDependencyDestinations is the partial
+// install over a real addon that ships dependencies: an iOS-only project must end
+// up with a .gdextension naming exactly the iOS dependencies and nothing else.
+func TestExtensionReassemblyOfOneSliceKeepsItsDependencyDestinations(t *testing.T) {
+	original, err := os.ReadFile("testdata/limboai.gdextension")
+	require.NoError(t, err)
+
+	core, removed, err := PartitionExtension(original, "res://addons/limboai")
+	require.NoError(t, err)
+
+	iosSlice := SliceID{Platform: "ios"}
+	reassembled, err := ReassembleExtension(core, removed, []SliceID{CoreSliceID(), iosSlice})
+	require.NoError(t, err)
+	require.Equal(t, map[string]ExtensionDependencyTargets{
+		"ios.debug":   {"res://addons/limboai/bin/libgodot-cpp.ios.template_debug.a": ""},
+		"ios.release": {"res://addons/limboai/bin/libgodot-cpp.ios.template_release.a": ""},
+	}, targetsOf(t, reassembled))
+	require.NotContains(t, string(reassembled), "android")
 }

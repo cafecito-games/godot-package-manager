@@ -213,7 +213,7 @@ func rejectUnknownIndexKeys(metaData toml.MetaData) error {
 	// are case-sensitive, so a key that differs only in case is an unknown key
 	// that strict decoding alone would let through.
 	for _, key := range metaData.Keys() {
-		if err := rejectMisspelledIndexKey(key); err != nil {
+		if err := rejectMisspelledIndexKey(metaData, key); err != nil {
 			return err
 		}
 	}
@@ -253,7 +253,7 @@ func sliceFieldNames() []string {
 // rejectMisspelledIndexKey checks one document key against the schema at the
 // position it appears in. Positions the schema leaves open — a slice ID, a
 // .gdextension path, a platform tag — are validated later as values, not here.
-func rejectMisspelledIndexKey(key toml.Key) error {
+func rejectMisspelledIndexKey(metaData toml.MetaData, key toml.Key) error {
 	if len(key) == 0 {
 		return nil
 	}
@@ -271,25 +271,79 @@ func rejectMisspelledIndexKey(key toml.Key) error {
 	}
 	if len(key) >= 4 {
 		// A key below a slice's own fields is inside a partitioned section, and
-		// how deep that section nests is the section's own property: a
-		// [libraries] entry stops at its value, while a [dependencies] entry
-		// holds one more table of dependency paths.
-		maximumDepth, partitioned := indexKeyDepths[ExtensionSection(key[2])]
+		// how deep that section nests is the section's own property.
+		maximumDepth, partitioned := indexSectionKeyDepth(ExtensionSection(key[2]))
 		if !partitioned || len(key) > maximumDepth {
 			return unknownSliceKeyError(strings.Join(key[2:], "."), key[1])
+		}
+		if err := requireIndexEntryValueType(metaData, key); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// indexKeyDepths is the number of index key components the deepest key of each
-// partitioned section has, and the single declaration of that maximum. A
-// [libraries] key bottoms out at slices.<id>.libraries.<path>.<entryKey>, while
-// a [dependencies] entry holds a Dictionary, so its keys reach one level
-// further: slices.<id>.dependencies.<path>.<entryKey>.<dependencyPath>.
-var indexKeyDepths = map[ExtensionSection]int{
-	SectionLibraries:    5,
-	SectionDependencies: 6,
+// indexEntryKeyDepth is the number of index key components an entry key has:
+// slices.<id>.<section>.<path>.<entryKey>.
+const indexEntryKeyDepth = 5
+
+// indexSectionEntryIsTable declares, for each partitioned section, whether an
+// entry's value is a TOML table. It is the single declaration of the one way the
+// two sections differ — a [libraries] entry names one res:// path, while a
+// [dependencies] entry is Godot's Dictionary of dependency paths to export
+// destinations — and both the section's maximum key depth and the TOML type its
+// entries must be written in are derived from it.
+var indexSectionEntryIsTable = map[ExtensionSection]bool{
+	SectionLibraries:    false,
+	SectionDependencies: true,
+}
+
+// indexSectionKeyDepth returns the number of index key components the named
+// section's deepest key has, and whether the section is partitioned at all. A
+// section whose entries are tables reaches one level past an entry key, because
+// the table's own keys are index keys too.
+func indexSectionKeyDepth(section ExtensionSection) (int, bool) {
+	entryIsTable, partitioned := indexSectionEntryIsTable[section]
+	if !partitioned {
+		return 0, false
+	}
+	if entryIsTable {
+		return indexEntryKeyDepth + 1, true
+	}
+	return indexEntryKeyDepth, true
+}
+
+// requireIndexEntryValueType rejects an entry written in a TOML type the section
+// does not declare.
+//
+// Strict decoding does not cover this on its own. It reports a table where the
+// schema declares a string, but it decodes a string into an empty map where the
+// schema declares a table, recording neither an error nor an undecoded key. An
+// index still written in the pre-nesting shape — a bare res:// string as a
+// [dependencies] entry — would therefore reach validation as an entry naming no
+// dependency, rejected but misdiagnosed, and a producer would be told their
+// table is empty rather than that their shape is a format older than this one.
+func requireIndexEntryValueType(metaData toml.MetaData, key toml.Key) error {
+	if len(key) != indexEntryKeyDepth {
+		return nil
+	}
+	entryIsTable, partitioned := indexSectionEntryIsTable[ExtensionSection(key[2])]
+	if !partitioned {
+		return nil
+	}
+	const tomlTableType = "Hash"
+	declaredType := metaData.Type(key...)
+	if entryIsTable == (declaredType == tomlTableType) {
+		return nil
+	}
+	expected := "one quoted string"
+	if entryIsTable {
+		expected = "a table of " + resourcePrefix + " paths to export destinations"
+	}
+	return fetchErrorf(
+		"index key %q is written as a TOML %s, but a %s entry is %s",
+		strings.Join(key, "."), declaredType, key[2], expected,
+	)
 }
 
 func unknownIndexKeyError(key string) error {
