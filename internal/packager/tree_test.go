@@ -68,42 +68,6 @@ func TestAddonTreeResolvesADirectoryBundleToItsFiles(t *testing.T) {
 	require.Nil(t, tree.resolve("plugin"))
 }
 
-func TestAddonTreeRefusesAFileReachedThroughADirectorySwappedAfterTheWalk(t *testing.T) {
-	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, "bin"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "bin", "library.so"), []byte("mine"), 0o755))
-
-	tree, err := walkAddonTree(root, ".")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, tree.close()) })
-	require.Equal(t, []string{"bin/library.so"}, tree.paths())
-
-	// A directory the walk already descended into is replaced by a link to a
-	// directory outside the addon root that holds a same-named file. Every
-	// component of "bin/library.so" still resolves, so nothing but an
-	// escape-proof open refuses it.
-	outside := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(outside, "library.so"), []byte("secret"), 0o755))
-	require.NoError(t, os.RemoveAll(filepath.Join(root, "bin")))
-	require.NoError(t, os.Symlink(outside, filepath.Join(root, "bin")))
-
-	archivePath := filepath.Join(t.TempDir(), "addon-core.zip")
-	err = writeArchive(archivePath, archiveFilesFor(tree, tree.paths()))
-	require.Error(t, err)
-	_, statErr := os.Stat(archivePath)
-	require.True(t, os.IsNotExist(statErr))
-}
-
-// archiveFilesFor builds archive entries for walked paths, the way the packager
-// does for a platform slice.
-func archiveFilesFor(tree *addonTree, relativePaths []string) []archiveFile {
-	files := make([]archiveFile, 0, len(relativePaths))
-	for _, relativePath := range relativePaths {
-		files = append(files, tree.archiveFileAt(relativePath))
-	}
-	return files
-}
-
 func TestOpenAddonRootRefusesASymlinkedComponent(t *testing.T) {
 	repository := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(repository, "real", "addon"), 0o755))

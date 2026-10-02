@@ -3,6 +3,7 @@ package packager
 import (
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -19,12 +20,6 @@ type treeFile struct {
 
 	// executable records whether any execute bit is set on disk.
 	executable bool
-
-	// walkedInfo is the file the walk accepted. It is compared against the file
-	// the archive later opens at the same name, which reports a tree edited
-	// mid-run when the replacement lands on a different inode. It is not a
-	// defense against a deliberate swap, because an inode can be reused.
-	walkedInfo fs.FileInfo
 }
 
 // addonTree is the addon subtree as packaging sees it: every regular file under
@@ -33,11 +28,8 @@ type treeFile struct {
 // It is the packager's only view of the tree, and it holds the addon root as an
 // open *os.Root rather than as a path. Every read of a file goes through that
 // handle, so no path this package hands to the operating system can resolve
-// outside the addon root — not through a symlink the walk saw, and not through
-// one that replaced a directory the walk had already descended into. Rechecking
-// a path's own components would only narrow that window; rooting every open in a
-// directory handle closes it, which is what keeps a file the author never meant
-// to publish out of a release archive.
+// outside the addon root, which is what keeps a file the author never meant to
+// publish out of a release archive.
 type addonTree struct {
 	// path is the addon root's filesystem path, used for diagnostics only.
 	path string
@@ -123,7 +115,6 @@ func (tree *addonTree) walk() error {
 		tree.files = append(tree.files, treeFile{
 			relativePath: relativePath,
 			executable:   info.Mode().Perm()&0o111 != 0,
-			walkedInfo:   info,
 		})
 		return nil
 	})
@@ -142,77 +133,58 @@ func (tree *addonTree) walk() error {
 	return nil
 }
 
-// openAddonRoot opens the addon subtree, descending one component of addonPath
-// at a time from the repository root.
+// openAddonRoot opens the addon subtree as an *os.Root inside the repository
+// root.
 //
-// Each component is lstat-ed through its parent's handle and opened through that
-// same handle, so the check and the open address the same directory entry rather
-// than re-resolving a path: a component that is a symlink is refused before it
-// is descended into, and one that would escape the repository root cannot be
-// opened at all. The identity comparison that follows is best effort for the
-// same reason it is in openRegularFile — an inode can be reused, so it reports a
-// replacement rather than ruling one out.
+// Every component of addonPath is lstat-ed through the repository's own handle
+// first, so a component that is a symlink is reported as such rather than
+// followed, and a component that is not a directory is named in the diagnostic.
+// The subtree itself is then opened through that same handle, which is what
+// bounds every later read to the addon root.
 //
 // addonPath is already known to be a clean relative path, so it has no "." or
 // ".." component; "." names the repository root itself, which is what the tests
 // of this package use.
 func openAddonRoot(repositoryRoot, addonPath string) (*os.Root, error) {
-	current, err := os.OpenRoot(repositoryRoot)
+	repository, err := os.OpenRoot(repositoryRoot)
 	if err != nil {
 		return nil, manifestErrorf("opening the addon repository at %s: %s", repositoryRoot, err)
 	}
 	if addonPath == "." {
-		return current, nil
+		return repository, nil
 	}
+	defer func() { _ = repository.Close() }()
+
 	traversed := repositoryRoot
+	prefix := ""
 	for _, component := range strings.Split(addonPath, "/") {
 		traversed = filepath.Join(traversed, component)
-		child, err := descendInto(current, component, addonPath, traversed)
-		_ = current.Close()
+		prefix = path.Join(prefix, component)
+		// Checked before anything deeper is addressed, so a symlinked component is
+		// refused at itself rather than reported as a failure to resolve the rest
+		// of the path.
+		link, err := repository.Lstat(prefix)
 		if err != nil {
-			return nil, err
+			if os.IsNotExist(err) {
+				return nil, manifestErrorf("[package] addon_path %q names %s, which does not exist", addonPath, traversed)
+			}
+			return nil, manifestErrorf("[package] addon_path %q: reading %s: %s", addonPath, traversed, err)
 		}
-		current = child
-	}
-	return current, nil
-}
-
-// descendInto opens one component of addon_path through its parent's handle and
-// confirms that the directory it opened is the one it checked.
-func descendInto(parent *os.Root, component, addonPath, traversed string) (*os.Root, error) {
-	link, err := parent.Lstat(component)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, manifestErrorf("[package] addon_path %q names %s, which does not exist", addonPath, traversed)
+		if link.Mode()&os.ModeSymlink != 0 {
+			return nil, manifestErrorf(
+				"[package] addon_path %q passes through the symlink %s; the addon subtree is read as it sits in the repository",
+				addonPath, traversed,
+			)
 		}
-		return nil, manifestErrorf("[package] addon_path %q: reading %s: %s", addonPath, traversed, err)
+		if !link.IsDir() {
+			return nil, manifestErrorf("[package] addon_path %q names %s, which is not a directory", addonPath, traversed)
+		}
 	}
-	if link.Mode()&os.ModeSymlink != 0 {
-		return nil, manifestErrorf(
-			"[package] addon_path %q passes through the symlink %s; the addon subtree is read as it sits in the repository",
-			addonPath, traversed,
-		)
-	}
-	if !link.IsDir() {
-		return nil, manifestErrorf("[package] addon_path %q names %s, which is not a directory", addonPath, traversed)
-	}
-	child, err := parent.OpenRoot(component)
+	addonRoot, err := repository.OpenRoot(addonPath)
 	if err != nil {
 		return nil, manifestErrorf("[package] addon_path %q: opening %s: %s", addonPath, traversed, err)
 	}
-	opened, err := child.Stat(".")
-	if err != nil {
-		_ = child.Close()
-		return nil, manifestErrorf("[package] addon_path %q: reading %s: %s", addonPath, traversed, err)
-	}
-	if !os.SameFile(link, opened) {
-		_ = child.Close()
-		return nil, manifestErrorf(
-			"[package] addon_path %q: %s changed while the addon was being packaged; it is no longer the directory that was checked",
-			addonPath, traversed,
-		)
-	}
-	return child, nil
+	return addonRoot, nil
 }
 
 // addonInfo returns the addon root's own file information, taken through the
@@ -276,7 +248,6 @@ func (tree *addonTree) sourceAt(relativePath string) fileSource {
 		root:        tree.root,
 		name:        file.relativePath,
 		displayPath: tree.describe(file.relativePath),
-		walkedInfo:  file.walkedInfo,
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -33,7 +32,7 @@ const (
 )
 
 // fileSource is a read handle for one file of the addon subtree: the open addon
-// root, the file's name within it, and the file the tree walk accepted there.
+// root and the file's name within it.
 //
 // Reads go through the root rather than through a bare path, so a path cannot
 // resolve outside the addon root however the tree changes under the packager.
@@ -43,10 +42,6 @@ type fileSource struct {
 
 	// displayPath is the file's filesystem path, for diagnostics only.
 	displayPath string
-
-	// walkedInfo is the file the tree walk accepted, compared against the file
-	// actually opened.
-	walkedInfo fs.FileInfo
 }
 
 // archiveFile is one regular file going into a slice archive.
@@ -159,18 +154,13 @@ func writeArchiveEntry(writer *zip.Writer, file archiveFile) error {
 }
 
 // openRegularFile opens a file of the addon subtree and refuses anything that is
-// not the regular file the tree walk accepted.
+// not a regular file.
 //
-// Two rules apply, and they do different amounts of work. The open goes through
-// the addon root's handle, so every component is resolved inside that root and a
-// directory replaced by a symlink after the walk cannot make the path reach
-// outside it; that part is a guarantee. The identity comparison beside it is
-// best effort: it reports a file that no longer has the device and inode the
-// walk recorded, which catches an addon tree edited while it was being packaged
-// often enough to be worth the two syscalls, but it is not a defense against a
-// deliberate swap. A replacement at the same path can be allocated the inode the
-// original just freed — Linux routinely does — and then the comparison succeeds.
-// The guarantee here is containment, not freshness.
+// The open goes through the addon root's handle, so every component is resolved
+// inside that root: a path cannot reach outside the addon subtree, whether
+// through a symlink the walk saw or one that replaced an entry afterwards. That
+// containment is the guarantee here; the packager reads the author's own working
+// tree as it finds it and does not promise that the tree held still.
 func openRegularFile(source fileSource) (*os.File, error) {
 	file, err := source.root.Open(source.name)
 	if err != nil {
@@ -185,13 +175,6 @@ func openRegularFile(source fileSource) (*os.File, error) {
 		_ = file.Close()
 		return nil, manifestErrorf(
 			"%s is not a regular file; a slice archive carries regular files only", source.displayPath,
-		)
-	}
-	if source.walkedInfo != nil && !os.SameFile(source.walkedInfo, info) {
-		_ = file.Close()
-		return nil, manifestErrorf(
-			"%s changed while the addon was being packaged; it is no longer the file the tree walk accepted",
-			source.displayPath,
 		)
 	}
 	return file, nil
