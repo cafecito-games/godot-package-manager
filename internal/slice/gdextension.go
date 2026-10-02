@@ -62,21 +62,42 @@ type ExtensionEntries struct {
 // decision that needs the published slice set, so it belongs to the packager and
 // not here. This function sees one file and reports what each key says.
 //
-// addonRoot is the addon's res:// root, for instance "res://addons/limboai". It
-// is a parameter rather than something derived from a path on disk because this
-// function performs no filesystem access at all: an entry's containment in the
-// addon subtree is checked lexically against this prefix. Both the root and the
-// entry values are rejected unless they are clean res:// paths, so a lexical
-// prefix test is sound.
+// addonRoot is the addon's res:// root, for instance "res://addons/limboai", and
+// extensionPath is this .gdextension file's own path relative to that root, for
+// instance "godot_jolt.gdextension" or "sub/dir/thing.gdextension" — the same
+// string the index uses as this file's section path key, so one spelling of a
+// file's identity spans partition, index, and reassembly. Both are parameters
+// rather than anything derived from disk because this function performs no
+// filesystem access at all.
+//
+// Godot accepts an entry's path either as a res:// path or as a path relative to
+// the .gdextension file's own location, and real addons ship both forms, so both
+// are accepted here. A relative value is resolved against extensionPath's
+// directory by string arithmetic alone, and the resolved value then obeys exactly
+// the rules a res:// value does: it must be a clean res:// path, and it must name
+// a file inside the addon subtree, checked lexically against addonRoot. A
+// traversal component in a relative value is refused rather than simplified
+// away, because a normalized traversal would land inside or outside the addon
+// root depending only on how deep that root happens to be; a res:// path always
+// names the same file unambiguously and is accepted instead.
+//
+// res:// is the one form published. The index stores the resolved value, so
+// ReassembleExtension emits res:// for every entry whichever form the author
+// wrote, which is what keeps the index's value grammar and determinism unchanged.
 //
 // Every failure is an *output.ManifestError: a .gdextension partitioned here is
 // the addon author's own file, and a malformed one is their mistake to fix. The
 // input buffer is never modified.
-func PartitionExtension(content []byte, addonRoot string) ([]byte, map[SliceID]ExtensionEntries, error) {
+func PartitionExtension(content []byte, addonRoot, extensionPath string) ([]byte, map[SliceID]ExtensionEntries, error) {
 	root, err := cleanAddonRoot(addonRoot)
 	if err != nil {
 		return nil, nil, manifestErrorf("partitioning .gdextension: %s", err)
 	}
+	directory, err := extensionDirectoryOf(extensionPath)
+	if err != nil {
+		return nil, nil, manifestErrorf("partitioning .gdextension: %s", err)
+	}
+	location := extensionLocation{addonRoot: root, directory: directory}
 	file, err := parseExtensionDocument(content)
 	if err != nil {
 		return nil, nil, manifestErrorf("partitioning .gdextension: %s", err)
@@ -95,11 +116,11 @@ func PartitionExtension(content []byte, addonRoot string) ([]byte, map[SliceID]E
 	// carried silently into the core body.
 	partitioners := map[ExtensionSection]func() error{
 		SectionLibraries: func() error {
-			return partitionSection(file, root, removed, SectionLibraries, extensionLibraryValueOf,
+			return partitionSection(file, location, removed, SectionLibraries, extensionLibraryValueOf,
 				func(entries *ExtensionEntries) *ExtensionEntryTable[string] { return &entries.Libraries })
 		},
 		SectionDependencies: func() error {
-			return partitionSection(file, root, removed, SectionDependencies, extensionDependencyTargetsOf,
+			return partitionSection(file, location, removed, SectionDependencies, extensionDependencyTargetsOf,
 				func(entries *ExtensionEntries) *ExtensionEntryTable[ExtensionDependencyTargets] {
 					return &entries.Dependencies
 				})
@@ -125,10 +146,10 @@ func PartitionExtension(content []byte, addonRoot string) ([]byte, map[SliceID]E
 // values are stored in.
 func partitionSection[Value any](
 	file *ast.File,
-	root string,
+	location extensionLocation,
 	removed map[SliceID]ExtensionEntries,
 	section ExtensionSection,
-	readValue func(string, *ast.Assignment) (Value, error),
+	readValue func(extensionLocation, *ast.Assignment) (Value, error),
 	tableOf func(*ExtensionEntries) *ExtensionEntryTable[Value],
 ) error {
 	block := sectionNamed(file, section)
@@ -157,7 +178,7 @@ func partitionSection[Value any](
 			kept = append(kept, statement)
 			continue
 		}
-		owner, value, err := partitionedEntry(root, assignment, readValue)
+		owner, value, err := partitionedEntry(location, assignment, readValue)
 		if err != nil {
 			return manifestErrorf("partitioning .gdextension [%s]: %s", section, err)
 		}
@@ -479,9 +500,9 @@ func validatePartitionedSectionNames(file *ast.File) error {
 // which rules the leaf obeys are the section's own properties, while the key's
 // reduction to a slice is shared.
 func partitionedEntry[Value any](
-	root string,
+	location extensionLocation,
 	assignment *ast.Assignment,
-	readValue func(string, *ast.Assignment) (Value, error),
+	readValue func(extensionLocation, *ast.Assignment) (Value, error),
 ) (SliceID, Value, error) {
 	var zero Value
 	owner, err := ReduceLibraryKey(assignment.Key)
@@ -490,7 +511,7 @@ func partitionedEntry[Value any](
 		// error's own type would decide the exit code of whatever wraps this one.
 		return SliceID{}, zero, fmt.Errorf("%s", err)
 	}
-	value, err := readValue(root, assignment)
+	value, err := readValue(location, assignment)
 	if err != nil {
 		return SliceID{}, zero, fmt.Errorf("key %q: %s", assignment.Key, err)
 	}
@@ -503,7 +524,7 @@ func partitionedEntry[Value any](
 // Godot accepts a Dictionary as a [dependencies] value but not as a [libraries]
 // one, and the reader is selected by the section rather than by the Variant's
 // kind, so a Dictionary here is still reported rather than interpreted.
-func extensionLibraryValueOf(root string, assignment *ast.Assignment) (string, error) {
+func extensionLibraryValueOf(location extensionLocation, assignment *ast.Assignment) (string, error) {
 	literal, isString := assignment.Value.(*ast.StringLiteral)
 	if !isString {
 		return "", fmt.Errorf(
@@ -515,10 +536,7 @@ func extensionLibraryValueOf(root string, assignment *ast.Assignment) (string, e
 	if err != nil {
 		return "", err
 	}
-	if err := requireContainedResourcePath(root, path); err != nil {
-		return "", err
-	}
-	return path, nil
+	return location.resolveEntryPath(path)
 }
 
 // extensionDependencyTargetsOf reads a [dependencies] entry's value as Godot's
@@ -531,19 +549,20 @@ func extensionLibraryValueOf(root string, assignment *ast.Assignment) (string, e
 // boundary, with a bare string normalized into the single-entry Dictionary with
 // an empty destination that is its Godot equivalent, so the Go type and the
 // index have exactly one representation of a dependency entry.
-func extensionDependencyTargetsOf(root string, assignment *ast.Assignment) (ExtensionDependencyTargets, error) {
+func extensionDependencyTargetsOf(location extensionLocation, assignment *ast.Assignment) (ExtensionDependencyTargets, error) {
 	switch value := assignment.Value.(type) {
 	case *ast.StringLiteral:
 		path, err := plainStringOf(value)
 		if err != nil {
 			return nil, err
 		}
-		if err := requireContainedResourcePath(root, path); err != nil {
+		resolved, err := location.resolveEntryPath(path)
+		if err != nil {
 			return nil, err
 		}
-		return ExtensionDependencyTargets{path: ""}, nil
+		return ExtensionDependencyTargets{resolved: ""}, nil
 	case *ast.DictionaryLiteral:
-		return dependencyTargetsOfDictionary(root, value)
+		return dependencyTargetsOfDictionary(location, value)
 	case *ast.TypedDictionaryLiteral:
 		// Godot's Dictionary[KeyType, ValueType]({...}) spelling. Only a
 		// String-to-String dictionary carries a dependency entry; any other
@@ -556,7 +575,7 @@ func extensionDependencyTargetsOf(root string, assignment *ast.Assignment) (Exte
 				SectionDependencies, resourcePrefix, format.Expression(assignment.Value),
 			)
 		}
-		return dependencyTargetsOfDictionary(root, value.Value)
+		return dependencyTargetsOfDictionary(location, value.Value)
 	default:
 		return nil, fmt.Errorf(
 			"value is a %s, and a [%s] entry is one quoted %s path or a dictionary mapping quoted %s paths to export destinations: %s",
@@ -574,8 +593,15 @@ func extensionDependencyTargetsOf(root string, assignment *ast.Assignment) (Exte
 // separate treatment in the core body. A duplicate dependency path is reported
 // rather than resolved last-wins, because a map assignment would silently drop a
 // destination.
-func dependencyTargetsOfDictionary(root string, dictionary *ast.DictionaryLiteral) (ExtensionDependencyTargets, error) {
+func dependencyTargetsOfDictionary(
+	location extensionLocation,
+	dictionary *ast.DictionaryLiteral,
+) (ExtensionDependencyTargets, error) {
 	targets := ExtensionDependencyTargets{}
+	// The spelling each resolved path was written as, so a collision created by
+	// resolution is reported by naming both spellings rather than only the
+	// resolved path the author never wrote.
+	spelling := map[string]string{}
 	if dictionary != nil {
 		for _, item := range dictionary.Items {
 			entry, isEntry := item.(*ast.DictionaryEntry)
@@ -586,7 +612,8 @@ func dependencyTargetsOfDictionary(root string, dictionary *ast.DictionaryLitera
 			if err != nil {
 				return nil, err
 			}
-			if err := requireContainedResourcePath(root, path); err != nil {
+			resolved, err := location.resolveEntryPath(path)
+			if err != nil {
 				return nil, err
 			}
 			destination, err := dependencyDictionaryString(entry.Value, fmt.Sprintf("destination of dependency %q", path))
@@ -596,10 +623,21 @@ func dependencyTargetsOfDictionary(root string, dictionary *ast.DictionaryLitera
 			if err := validateExportDestination(destination); err != nil {
 				return nil, err
 			}
-			if _, duplicate := targets[path]; duplicate {
-				return nil, fmt.Errorf("dependency %q is declared more than once", path)
+			// Checked after resolution, because one Dictionary is one map from a
+			// dependency to its destination: two spellings of one dependency
+			// carry two possibly different destinations for one file, which is
+			// ambiguous rather than redundant.
+			if previous, duplicate := spelling[resolved]; duplicate {
+				if previous == path {
+					return nil, fmt.Errorf("dependency %q is declared more than once", path)
+				}
+				return nil, fmt.Errorf(
+					"dependencies %q and %q both name %q; one dictionary maps each dependency to one destination, so two spellings of one dependency are ambiguous",
+					previous, path, resolved,
+				)
 			}
-			targets[path] = destination
+			spelling[resolved] = path
+			targets[resolved] = destination
 		}
 	}
 	if len(targets) == 0 {
@@ -643,15 +681,101 @@ func plainStringOf(literal *ast.StringLiteral) (string, error) {
 	return literal.Value, nil
 }
 
-// requireContainedResourcePath applies the two rules every res:// path a
-// partition reads obeys: it is a clean res:// path, and it names a file inside
-// the addon subtree. A dependency path is checked exactly like a library path,
-// because both locate a file the slice archive carries.
-func requireContainedResourcePath(root, path string) error {
-	if err := validatePartitionedValue(path); err != nil {
-		return err
+// extensionLocation is the frame of reference one .gdextension's entry values are
+// read against: the addon's res:// root, which containment is checked against,
+// and the .gdextension file's own directory relative to that root, which a
+// relative value is resolved against. It is one value rather than two parameters
+// because every reader needs both and neither is meaningful without the other.
+type extensionLocation struct {
+	addonRoot string
+
+	// directory is the .gdextension file's directory relative to addonRoot, with
+	// no trailing separator, and empty when the file sits at the addon root.
+	directory string
+}
+
+// extensionDirectoryOf validates a .gdextension's own path relative to the addon
+// root and returns the directory part of it, which is the frame a relative entry
+// value is resolved against.
+//
+// The directory is taken with strings.LastIndex rather than with path/filepath,
+// because partitioning performs no filesystem access and a path/filepath call
+// would also apply the host's separator rules to a Godot resource path.
+func extensionDirectoryOf(extensionPath string) (string, error) {
+	// Never defaulted to the addon root: defaulting it would resolve a relative
+	// value against a directory the file does not sit in and publish a path
+	// naming a file that is not there.
+	if extensionPath == "" {
+		return "", fmt.Errorf(
+			"the %s file's own path relative to the addon root is required", extensionSuffix,
+		)
 	}
-	return requireWithinAddonRoot(root, path)
+	if err := validateExtensionPath(extensionPath); err != nil {
+		return "", fmt.Errorf("invalid %s path: %s", extensionSuffix, err)
+	}
+	separator := strings.LastIndex(extensionPath, "/")
+	if separator < 0 {
+		return "", nil
+	}
+	return extensionPath[:separator], nil
+}
+
+// resolveEntryPath applies the rules every path a partition reads obeys, in the
+// one order they are stated: a relative value is resolved against the
+// .gdextension's own directory, and the resolved value must then be a clean
+// res:// path naming a file inside the addon subtree. A dependency path is
+// resolved and checked exactly like a library path, because both locate a file
+// the slice archive carries, and a [dependencies] Dictionary's keys are
+// dependency paths at that same depth.
+//
+// A res:// value resolves to itself, which is what makes the published form a
+// fixpoint: partitioning an emitted file yields the entries it was emitted from.
+func (location extensionLocation) resolveEntryPath(value string) (string, error) {
+	resolved := value
+	if !strings.HasPrefix(value, resourcePrefix) {
+		if err := requireNoTraversalComponent(value); err != nil {
+			return "", err
+		}
+		if err := validateRelativePath(value); err != nil {
+			return "", fmt.Errorf(
+				"value %q is neither a %s path nor a path relative to the %s file: %s",
+				value, resourcePrefix, extensionSuffix, err,
+			)
+		}
+		if location.directory == "" {
+			resolved = location.addonRoot + "/" + value
+		} else {
+			resolved = location.addonRoot + "/" + location.directory + "/" + value
+		}
+	}
+	if err := validatePartitionedValue(resolved); err != nil {
+		return "", err
+	}
+	if err := requireWithinAddonRoot(location.addonRoot, resolved, value); err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
+// requireNoTraversalComponent refuses a traversal in a relative entry value
+// before it is resolved, rather than normalizing it away.
+//
+// validateRelativePath already refuses one for every other path this package
+// accepts, and normalize-then-check would be the weaker rule: "bin/../../x/lib.so"
+// would land inside the addon root or outside it depending only on how deep that
+// root happens to be, so one authored value would be accepted for one addon and
+// refused for another. Nothing becomes unpackageable, because a res:// path can
+// always name the same file, which is what the diagnostic says.
+func requireNoTraversalComponent(value string) error {
+	for _, component := range strings.Split(value, "/") {
+		if component == ".." {
+			return fmt.Errorf(
+				"value %q has a %q component; a traversal is rejected rather than simplified, and a %s path names the same file instead",
+				value, "..", resourcePrefix,
+			)
+		}
+	}
+	return nil
 }
 
 // isStringTypeReference reports whether a declared container type is plain
@@ -720,14 +844,25 @@ func cleanAddonRoot(addonRoot string) (string, error) {
 // archive is extracted into the addon's own directory. Both paths are already
 // known to be clean res:// paths, so comparing them lexically is exact and needs
 // no disk access.
-func requireWithinAddonRoot(root, value string) error {
-	if !strings.HasPrefix(value, root+"/") {
+//
+// value is the resolved path the rule is about and authored is the spelling the
+// addon's author wrote. They differ only for a value written relative to the
+// .gdextension, and then the diagnostic names both, so an author is told what
+// they wrote, what it resolved to, and the root it left.
+func requireWithinAddonRoot(root, value, authored string) error {
+	if strings.HasPrefix(value, root+"/") {
+		return nil
+	}
+	if authored != value {
 		return fmt.Errorf(
-			"value %q is outside the addon root %q; a slice carries only files from within the addon subtree",
-			value, root,
+			"value %q resolves to %q, which is outside the addon root %q; a slice carries only files from within the addon subtree",
+			authored, value, root,
 		)
 	}
-	return nil
+	return fmt.Errorf(
+		"value %q is outside the addon root %q; a slice carries only files from within the addon subtree",
+		value, root,
+	)
 }
 
 // validatePartitionedValue rejects an entry value that is not a clean res:// path

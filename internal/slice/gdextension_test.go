@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -19,6 +20,11 @@ import (
 )
 
 const demoAddonRoot = "res://addons/demo"
+
+// demoExtensionPath is the demo addon's .gdextension path relative to its addon
+// root, which is the form PartitionExtension takes and the form the index uses
+// as that file's section path key.
+const demoExtensionPath = "demo.gdextension"
 
 const minimalExtension = `[configuration]
 
@@ -49,7 +55,7 @@ ios.template_release.arm64 = "res://addons/demo/bin/libsupport.ios.arm64.a"
 `
 
 func TestExtensionPartitionEmptiesLibrariesAndGroupsEntriesBySlice(t *testing.T) {
-	core, removed, err := PartitionExtension([]byte(minimalExtension), demoAddonRoot)
+	core, removed, err := PartitionExtension([]byte(minimalExtension), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 
 	require.Equal(t, "[configuration]\n"+
@@ -76,7 +82,7 @@ func TestExtensionPartitionEmptiesLibrariesAndGroupsEntriesBySlice(t *testing.T)
 // ExtensionEntries carries a section dimension: a flat map from slice ID to
 // entries would drop one of the two entries this fixture declares.
 func TestExtensionPartitionKeepsOneKeyPresentInBothSectionsDistinct(t *testing.T) {
-	core, removed, err := PartitionExtension([]byte(bothSectionsExtension), demoAddonRoot)
+	core, removed, err := PartitionExtension([]byte(bothSectionsExtension), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 
 	iosSlice := SliceID{Platform: "ios", Architecture: "arm64"}
@@ -110,22 +116,56 @@ func TestExtensionPartitionKeepsOneKeyPresentInBothSectionsDistinct(t *testing.T
 // installed .gdextension of a project that installed every slice describes
 // exactly what the author published, section for section and key for key, with
 // every untouched section's bytes intact.
+//
+// Every fixture here writes its entry values as res:// paths, which is the one
+// published form, so parsed-content identity is exact. A fixture whose values
+// are written relative to the .gdextension round-trips semantically instead —
+// each value becomes its res:// resolution — and is asserted by
+// TestExtensionRelativeValuesRoundTripAsCanonicalResourcePaths rather than
+// weakening the claim made here.
+//
+// Each fixture's addon root and .gdextension path are spelled out rather than
+// derived from its first value, because a relative value carries no root to
+// derive one from and one table cannot have two rules.
 func TestExtensionRoundTripReproducesEveryFixture(t *testing.T) {
-	for _, path := range []string{
-		"testdata/limboai.gdextension",
-		"testdata/real/terrabrush.gdextension",
-		"testdata/synthetic/both_sections.gdextension",
-		"testdata/synthetic/crlf_bom.gdextension",
-		"testdata/synthetic/preserved_sections.gdextension",
+	for _, fixture := range []struct {
+		path          string
+		addonRoot     string
+		extensionPath string
+	}{
+		{
+			path:          "testdata/limboai.gdextension",
+			addonRoot:     "res://addons/limboai",
+			extensionPath: "limboai.gdextension",
+		},
+		{
+			path:          "testdata/real/terrabrush.gdextension",
+			addonRoot:     "res://addons/terrabrush",
+			extensionPath: "terrabrush.gdextension",
+		},
+		{
+			path:          "testdata/synthetic/both_sections.gdextension",
+			addonRoot:     demoAddonRoot,
+			extensionPath: demoExtensionPath,
+		},
+		{
+			path:          "testdata/synthetic/crlf_bom.gdextension",
+			addonRoot:     demoAddonRoot,
+			extensionPath: demoExtensionPath,
+		},
+		{
+			path:          "testdata/synthetic/preserved_sections.gdextension",
+			addonRoot:     demoAddonRoot,
+			extensionPath: demoExtensionPath,
+		},
 	} {
-		t.Run(filepath.Base(path), func(t *testing.T) {
-			original, err := os.ReadFile(path)
+		t.Run(filepath.Base(fixture.path), func(t *testing.T) {
+			original, err := os.ReadFile(fixture.path)
 			require.NoError(t, err)
 
-			root := addonRootOfFixture(t, original)
-			core, removed, err := PartitionExtension(original, root)
+			core, removed, err := PartitionExtension(original, fixture.addonRoot, fixture.extensionPath)
 			require.NoError(t, err)
-			require.NotEmpty(t, removed, "fixture %s partitions no entries", path)
+			require.NotEmpty(t, removed, "fixture %s partitions no entries", fixture.path)
 
 			reassembled, err := ReassembleExtension(core, removed, allSlices(removed))
 			require.NoError(t, err)
@@ -134,7 +174,7 @@ func TestExtensionRoundTripReproducesEveryFixture(t *testing.T) {
 
 			// Partitioning the reassembled file must land back on the same core body
 			// and the same entries, which is what makes a repeat install a no-op.
-			secondCore, secondRemoved, err := PartitionExtension(reassembled, root)
+			secondCore, secondRemoved, err := PartitionExtension(reassembled, fixture.addonRoot, fixture.extensionPath)
 			require.NoError(t, err)
 			require.Equal(t, string(core), string(secondCore))
 			require.Equal(t, removed, secondRemoved)
@@ -150,7 +190,7 @@ func TestExtensionRoundTripPreservesUntouchedSectionsAndComments(t *testing.T) {
 	original, err := os.ReadFile("testdata/synthetic/preserved_sections.gdextension")
 	require.NoError(t, err)
 
-	core, removed, err := PartitionExtension(original, demoAddonRoot)
+	core, removed, err := PartitionExtension(original, demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 
 	for _, fragment := range []string{
@@ -191,7 +231,7 @@ func TestExtensionReassemblyOfOneSliceOmitsEveryOtherPlatform(t *testing.T) {
 	original, err := os.ReadFile("testdata/real/terrabrush.gdextension")
 	require.NoError(t, err)
 
-	core, removed, err := PartitionExtension(original, "res://addons/terrabrush")
+	core, removed, err := PartitionExtension(original, "res://addons/terrabrush", "terrabrush.gdextension")
 	require.NoError(t, err)
 
 	iosSlice := SliceID{Platform: "ios"}
@@ -218,7 +258,7 @@ func TestExtensionReassemblyOfOneSliceOmitsEveryOtherPlatform(t *testing.T) {
 // repeat install depends on: the same inputs always produce the same bytes,
 // whatever order the caller lists the slices in.
 func TestExtensionReassemblyIsDeterministicAndIdempotent(t *testing.T) {
-	core, removed, err := PartitionExtension([]byte(bothSectionsExtension), demoAddonRoot)
+	core, removed, err := PartitionExtension([]byte(bothSectionsExtension), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 
 	selected := allSlices(removed)
@@ -262,7 +302,7 @@ entry_symbol = "demo_init"
 macos.template_debug = "res://addons/demo/bin/libdemo.macos.framework"
 macos.arm64 = "res://addons/demo/bin/libdemo.macos.arm64.framework"
 `
-	core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+	core, removed, err := PartitionExtension([]byte(content), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 	require.Contains(t, removed, SliceID{Platform: "macos"})
 	require.Contains(t, removed, SliceID{Platform: "macos", Architecture: "arm64"})
@@ -280,7 +320,7 @@ func TestExtensionPartitionDoesNotMutateItsInput(t *testing.T) {
 	require.NoError(t, err)
 	untouched := bytes.Clone(original)
 
-	_, _, err = PartitionExtension(original, "res://addons/terrabrush")
+	_, _, err = PartitionExtension(original, "res://addons/terrabrush", "terrabrush.gdextension")
 	require.NoError(t, err)
 	require.Equal(t, untouched, original, "partition must not write through its input buffer")
 }
@@ -301,9 +341,9 @@ func TestExtensionNormalizesAByteOrderMarkAndCarriageReturns(t *testing.T) {
 
 	plain := bytes.ReplaceAll(bytes.TrimPrefix(decorated, []byte("\ufeff")), []byte("\r\n"), []byte("\n"))
 
-	decoratedCore, decoratedRemoved, err := PartitionExtension(decorated, demoAddonRoot)
+	decoratedCore, decoratedRemoved, err := PartitionExtension(decorated, demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
-	plainCore, plainRemoved, err := PartitionExtension(plain, demoAddonRoot)
+	plainCore, plainRemoved, err := PartitionExtension(plain, demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 
 	require.Equal(t, string(plainCore), string(decoratedCore),
@@ -342,9 +382,9 @@ ios.debug = "res://addons/demo/bin/libsecond.ios.xcframework"
 linux.release.x86_64 = "res://addons/demo/bin/libsecond.linux.so"
 `
 
-	firstCore, firstRemoved, err := PartitionExtension([]byte(first), demoAddonRoot)
+	firstCore, firstRemoved, err := PartitionExtension([]byte(first), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
-	secondCore, secondRemoved, err := PartitionExtension([]byte(second), demoAddonRoot)
+	secondCore, secondRemoved, err := PartitionExtension([]byte(second), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 
 	iosSlice := SliceID{Platform: "ios"}
@@ -369,7 +409,7 @@ linux.release.x86_64 = "res://addons/demo/bin/libsecond.linux.so"
 // between partition and the index: a section's table is written straight into an
 // IndexSlice with no conversion, and survives a save and a load.
 func TestExtensionEntriesAreAssignableToAnIndexSlice(t *testing.T) {
-	core, removed, err := PartitionExtension([]byte(bothSectionsExtension), demoAddonRoot)
+	core, removed, err := PartitionExtension([]byte(bothSectionsExtension), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 
 	const extensionPath = "demo.gdextension"
@@ -436,7 +476,7 @@ func TestExtensionEntriesAreAssignableToAnIndexSlice(t *testing.T) {
 // addonRoot parameter exists for: both functions run on in-memory bytes and a
 // res:// root alone, with no temporary directory and nothing read from disk.
 func TestExtensionPartitionAndReassemblyTouchNoFilesystem(t *testing.T) {
-	core, removed, err := PartitionExtension([]byte(bothSectionsExtension), demoAddonRoot)
+	core, removed, err := PartitionExtension([]byte(bothSectionsExtension), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 	require.NotEmpty(t, removed)
 
@@ -459,7 +499,7 @@ func TestExtensionPartitionHandlesEverySectionOfTheVocabulary(t *testing.T) {
 		fmt.Fprintf(&builder, "\n[%s]\n\nmacos.debug = \"res://addons/demo/bin/%s.framework\"\n", section, section)
 	}
 
-	core, removed, err := PartitionExtension([]byte(builder.String()), demoAddonRoot)
+	core, removed, err := PartitionExtension([]byte(builder.String()), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 
 	for _, section := range sections {
@@ -527,9 +567,14 @@ func TestExtensionPartitionIsFailClosedPerSection(t *testing.T) {
 			expectedMessage: []string{"libdemo", "unknown platform"},
 		},
 		{
-			name:            "value is not a resource path",
-			body:            `windows.release.x86_64 = "bin/libdemo.dll"`,
-			expectedMessage: []string{"bin/libdemo.dll", "res://"},
+			// A relative value is now accepted and resolved against the
+			// .gdextension's own directory, so the row that stood here is replaced
+			// by a value that is neither accepted form. The relative form's own
+			// rules are asserted per section by
+			// TestExtensionPartitionIsFailClosedOnRelativeValues.
+			name:            "value is in another uri scheme",
+			body:            `windows.release.x86_64 = "user://libdemo.dll"`,
+			expectedMessage: []string{"user://libdemo.dll", "res://", "relative to the"},
 		},
 		{
 			name:            "value is absolute on the host filesystem",
@@ -635,7 +680,7 @@ windows.release.x86_64 = "res://addons/demo/bin/libother.dll"`,
 					expectedMessage = override
 				}
 
-				core, removed, err := PartitionExtension([]byte(content), addonRoot)
+				core, removed, err := PartitionExtension([]byte(content), addonRoot, demoExtensionPath)
 				requireManifestError(t, err, expectedMessage...)
 				require.Nil(t, core, "a rejected .gdextension must yield no core body")
 				require.Nil(t, removed, "a rejected .gdextension must yield no entries")
@@ -701,7 +746,7 @@ func TestExtensionPartitionIsFailClosedOnTheDocument(t *testing.T) {
 
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
-			core, removed, err := PartitionExtension([]byte(row.content), demoAddonRoot)
+			core, removed, err := PartitionExtension([]byte(row.content), demoAddonRoot, demoExtensionPath)
 			requireManifestError(t, err, row.expectedMessage...)
 			require.Nil(t, core)
 			require.Nil(t, removed)
@@ -709,26 +754,8 @@ func TestExtensionPartitionIsFailClosedOnTheDocument(t *testing.T) {
 	}
 }
 
-// TestExtensionPartitionRejectsLibraryPathsRelativeToTheExtension pins the one
-// checked-in real .gdextension whose values the index schema cannot represent:
-// godot_jolt writes [libraries] paths relative to the .gdextension rather than
-// as res:// paths. It is rejected rather than partially partitioned, so a
-// producer learns at packaging time instead of shipping a .gdextension that
-// misdescribes the installed tree.
-//
-// limboai.gdextension used to be pinned here too, for its Godot Dictionary
-// [dependencies] values. The index now carries a dependency's export
-// destinations, so that file is accepted; its acceptance is asserted by
-// TestExtensionPartitionCarriesDictionaryDependencyDestinations instead.
-func TestExtensionPartitionRejectsLibraryPathsRelativeToTheExtension(t *testing.T) {
-	content, err := os.ReadFile("testdata/godot_jolt.gdextension")
-	require.NoError(t, err)
-	_, _, err = PartitionExtension(content, "res://addons/godot_jolt")
-	requireManifestError(t, err, "libraries", "res://")
-}
-
 func TestExtensionReassemblyIsFailClosed(t *testing.T) {
-	core, removed, err := PartitionExtension([]byte(bothSectionsExtension), demoAddonRoot)
+	core, removed, err := PartitionExtension([]byte(bothSectionsExtension), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 	iosSlice := SliceID{Platform: "ios", Architecture: "arm64"}
 	macosSlice := SliceID{Platform: "macos"}
@@ -870,7 +897,7 @@ func TestExtensionReassemblyIsFailClosed(t *testing.T) {
 // several .gdextension files has slices that carry entries in one of them and
 // none in another, and declaring an empty set says so explicitly.
 func TestExtensionReassemblyAcceptsASliceWithNoEntriesForThisFile(t *testing.T) {
-	core, removed, err := PartitionExtension([]byte(bothSectionsExtension), demoAddonRoot)
+	core, removed, err := PartitionExtension([]byte(bothSectionsExtension), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 
 	windowsSlice := SliceID{Platform: "windows", Architecture: "x86_64"}
@@ -889,7 +916,7 @@ func TestExtensionReassemblyAcceptsASliceWithNoEntriesForThisFile(t *testing.T) 
 // project did not install never reach the file, which is what keeps the installed
 // .gdextension a description of what is on disk.
 func TestExtensionReassemblyIgnoresUnselectedSlices(t *testing.T) {
-	core, removed, err := PartitionExtension([]byte(bothSectionsExtension), demoAddonRoot)
+	core, removed, err := PartitionExtension([]byte(bothSectionsExtension), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 
 	reassembled, err := ReassembleExtension(core, removed, []SliceID{CoreSliceID()})
@@ -1079,35 +1106,6 @@ func formatFixtureValue(assignment *ast.Assignment) string {
 	return strings.TrimSuffix(strings.TrimPrefix(configfile.Format(&file), "[value]\n"+assignment.Key+"="), "\n")
 }
 
-// addonRootOfFixture derives the res:// root a fixture's entries live under by
-// taking the "res://addons/<name>" prefix of its first partitioned entry. It
-// exists so a fixture can be added without also hard-coding its root here.
-func addonRootOfFixture(t *testing.T, content []byte) string {
-	t.Helper()
-	file := parseFixture(t, content)
-
-	for _, section := range PartitionedSections() {
-		for _, candidate := range file.Sections {
-			if candidate.Name != string(section) {
-				continue
-			}
-			for _, statement := range candidate.Statements {
-				assignment, isAssignment := statement.(*ast.Assignment)
-				if !isAssignment {
-					continue
-				}
-				literal, isString := assignment.Value.(*ast.StringLiteral)
-				require.True(t, isString, "fixture entry %q is not a string", assignment.Key)
-				components := strings.Split(strings.TrimPrefix(literal.Value, resourcePrefix), "/")
-				require.GreaterOrEqual(t, len(components), 2, "fixture value %q has no addon root", literal.Value)
-				return resourcePrefix + strings.Join(components[:2], "/")
-			}
-		}
-	}
-	t.Fatalf("fixture declares no partitioned entry")
-	return ""
-}
-
 func requireManifestError(t *testing.T, err error, fragments ...string) {
 	t.Helper()
 	require.Error(t, err)
@@ -1128,7 +1126,7 @@ func requireManifestError(t *testing.T, err error, fragments ...string) {
 func TestExtensionPartitionAcceptsAFileWithNoFinalNewline(t *testing.T) {
 	t.Run("nothing to partition", func(t *testing.T) {
 		const content = "[configuration]\n\nentry_symbol = \"demo_init\"\n\n[icons]\n\nDemoNode = \"res://addons/demo/demo_node.svg\""
-		core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+		core, removed, err := PartitionExtension([]byte(content), demoAddonRoot, demoExtensionPath)
 		require.NoError(t, err)
 		require.Empty(t, removed)
 		require.Equal(t, sectionsOf(t, []byte(content)), sectionsOf(t, core))
@@ -1141,7 +1139,7 @@ func TestExtensionPartitionAcceptsAFileWithNoFinalNewline(t *testing.T) {
 
 	t.Run("partitioned section ends the file", func(t *testing.T) {
 		const content = "[configuration]\n\nentry_symbol = \"demo_init\"\n\n[libraries]\n\nmacos.debug = \"res://addons/demo/bin/libdemo.framework\""
-		core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+		core, removed, err := PartitionExtension([]byte(content), demoAddonRoot, demoExtensionPath)
 		require.NoError(t, err)
 		require.Equal(t, "[configuration]\nentry_symbol=\"demo_init\"\n\n[libraries]\n", string(core))
 
@@ -1149,7 +1147,7 @@ func TestExtensionPartitionAcceptsAFileWithNoFinalNewline(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, sectionsOf(t, []byte(content)), sectionsOf(t, reassembled))
 
-		secondCore, secondRemoved, err := PartitionExtension(reassembled, demoAddonRoot)
+		secondCore, secondRemoved, err := PartitionExtension(reassembled, demoAddonRoot, demoExtensionPath)
 		require.NoError(t, err)
 		require.Equal(t, string(core), string(secondCore))
 		require.Equal(t, removed, secondRemoved)
@@ -1157,7 +1155,7 @@ func TestExtensionPartitionAcceptsAFileWithNoFinalNewline(t *testing.T) {
 
 	t.Run("partitioned header ends the file", func(t *testing.T) {
 		const content = "[configuration]\n\nentry_symbol = \"demo_init\"\n\n[libraries]"
-		core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+		core, removed, err := PartitionExtension([]byte(content), demoAddonRoot, demoExtensionPath)
 		require.NoError(t, err)
 		require.Empty(t, removed)
 		require.Equal(t, "[configuration]\nentry_symbol=\"demo_init\"\n\n[libraries]\n", string(core))
@@ -1188,7 +1186,7 @@ func TestExtensionPartitionDoesNotReadCommentsAsValueSyntax(t *testing.T) {
 				"[configuration]\n\nentry_symbol = \"demo_init\" %s\n\n[libraries]\n\nmacos.debug = \"res://addons/demo/bin/a.framework\"\n",
 				row.comment,
 			)
-			core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+			core, removed, err := PartitionExtension([]byte(content), demoAddonRoot, demoExtensionPath)
 			require.NoError(t, err)
 			require.Equal(t, map[SliceID]ExtensionEntries{
 				{Platform: "macos"}: {Libraries: ExtensionEntryTable[string]{
@@ -1205,7 +1203,7 @@ func TestExtensionPartitionDoesNotReadCommentsAsValueSyntax(t *testing.T) {
 				"[libraries]\n\nmacos.debug = \"res://addons/demo/bin/a.framework\" %s\n\n[dependencies]\n\nmacos.debug = \"res://addons/demo/bin/b.dylib\"\n",
 				row.comment,
 			)
-			_, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+			_, removed, err := PartitionExtension([]byte(content), demoAddonRoot, demoExtensionPath)
 			require.NoError(t, err)
 			require.Equal(t, map[SliceID]ExtensionEntries{
 				{Platform: "macos"}: {
@@ -1229,7 +1227,7 @@ func TestExtensionPartitionAcceptsATrailingCommentOnAnEntry(t *testing.T) {
 macos.debug = "res://addons/demo/bin/a.framework" ; the debug build
 ios.debug = "res://addons/demo/bin/b.xcframework" # the debug build
 `
-	_, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+	_, removed, err := PartitionExtension([]byte(content), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 	require.Equal(t, map[SliceID]ExtensionEntries{
 		{Platform: "macos"}: {Libraries: ExtensionEntryTable[string]{
@@ -1260,7 +1258,7 @@ linux.release.x86_64 = "res://addons/demo/bin/libdemo.linux.so"
 
 ; nothing is shipped beside the libraries yet
 `
-	core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+	core, removed, err := PartitionExtension([]byte(content), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 	require.Equal(t, commentsOf(t, []byte(content)), commentsOf(t, core),
 		"every comment of a partitioned section stays in the core body")
@@ -1272,7 +1270,7 @@ linux.release.x86_64 = "res://addons/demo/bin/libdemo.linux.so"
 	require.Equal(t, commentsOf(t, []byte(content)), commentsOf(t, reassembled))
 	require.Equal(t, sectionsOf(t, []byte(content)), sectionsOf(t, reassembled))
 
-	secondCore, secondRemoved, err := PartitionExtension(reassembled, demoAddonRoot)
+	secondCore, secondRemoved, err := PartitionExtension(reassembled, demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 	require.Equal(t, string(core), string(secondCore))
 	require.Equal(t, removed, secondRemoved)
@@ -1337,7 +1335,7 @@ windows.release.x86_64 = "res://addons/demo/bin/libdemo.dll"
 android.release.arm64 = "res://addons/demo/bin/libdemo.android.so"
 ; nothing else is built yet
 `
-	core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+	core, removed, err := PartitionExtension([]byte(content), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 	reassembled, err := ReassembleExtension(core, removed, allSlices(removed))
 	require.NoError(t, err)
@@ -1374,7 +1372,7 @@ macos.editor = "res://addons/demo/bin/libdemo.macos.editor.framework"
 macos.template_debug = "res://addons/demo/bin/libdemo.macos.debug.framework"
 macos.template_release.universal = "res://addons/demo/bin/libdemo.macos.universal.framework"
 `
-	_, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+	_, removed, err := PartitionExtension([]byte(content), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 	require.Equal(t, map[SliceID]ExtensionEntries{
 		{Platform: "macos"}: {Libraries: ExtensionEntryTable[string]{
@@ -1400,7 +1398,7 @@ func TestExtensionPartitionCarriesDictionaryDependencyDestinations(t *testing.T)
 	content, err := os.ReadFile("testdata/limboai.gdextension")
 	require.NoError(t, err)
 
-	core, removed, err := PartitionExtension(content, "res://addons/limboai")
+	core, removed, err := PartitionExtension(content, "res://addons/limboai", "limboai.gdextension")
 	require.NoError(t, err)
 	require.NotContains(t, string(core), "libgodot-cpp", "the core body must carry no dependency entry")
 
@@ -1447,9 +1445,9 @@ func TestExtensionPartitionIsFailClosedOnDependencyDictionaries(t *testing.T) {
 			expectedMessage: []string{"dependency path", "StringName"},
 		},
 		{
-			name:            "dictionary key is not a resource path",
-			body:            `ios.release = { "bin/libsupport.a" : "" }`,
-			expectedMessage: []string{"bin/libsupport.a", "res://"},
+			name:            "dictionary key is in another uri scheme",
+			body:            `ios.release = { "user://libsupport.a" : "" }`,
+			expectedMessage: []string{"user://libsupport.a", "res://", "relative to the"},
 		},
 		{
 			name:            "dictionary key traverses out of the addon",
@@ -1561,7 +1559,7 @@ func TestExtensionPartitionIsFailClosedOnDependencyDictionaries(t *testing.T) {
 			content := fmt.Sprintf(
 				"[configuration]\n\nentry_symbol = \"demo_init\"\n\n[%s]\n\n%s\n", SectionDependencies, row.body,
 			)
-			core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+			core, removed, err := PartitionExtension([]byte(content), demoAddonRoot, demoExtensionPath)
 			requireManifestError(t, err, row.expectedMessage...)
 			require.Nil(t, core, "a rejected .gdextension must yield no core body")
 			require.Nil(t, removed, "a rejected .gdextension must yield no entries")
@@ -1591,7 +1589,7 @@ entry_symbol = "demo_init"
 
 macos.debug = "res://addons/demo/bin/libsupport.dylib"
 `
-	core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+	core, removed, err := PartitionExtension([]byte(content), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 	require.Equal(t, ExtensionEntryTable[ExtensionDependencyTargets]{
 		"macos.debug": {"res://addons/demo/bin/libsupport.dylib": ""},
@@ -1609,7 +1607,7 @@ macos.debug = "res://addons/demo/bin/libsupport.dylib"
 		"reassembly emits the dictionary spelling, which is the single representation")
 
 	// Byte-stable from the second emission onward.
-	secondCore, secondRemoved, err := PartitionExtension(reassembled, demoAddonRoot)
+	secondCore, secondRemoved, err := PartitionExtension(reassembled, demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 	require.Equal(t, string(core), string(secondCore))
 	require.Equal(t, removed, secondRemoved)
@@ -1629,7 +1627,7 @@ entry_symbol = "demo_init"
 
 macos.debug = Dictionary[String, String]({ "res://addons/demo/bin/libsupport.dylib" : "Frameworks" })
 `
-	_, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+	_, removed, err := PartitionExtension([]byte(content), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 	require.Equal(t, ExtensionEntryTable[ExtensionDependencyTargets]{
 		"macos.debug": {"res://addons/demo/bin/libsupport.dylib": "Frameworks"},
@@ -1649,7 +1647,7 @@ entry_symbol = "demo_init"
 
 macos.debug = { "res://addons/demo/bin/libz.dylib" : "libs", "res://addons/demo/bin/liba.dylib" : "" }
 `
-	core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+	core, removed, err := PartitionExtension([]byte(content), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 	require.Equal(t, ExtensionDependencyTargets{
 		"res://addons/demo/bin/liba.dylib": "",
@@ -1705,7 +1703,7 @@ macos.debug = {
 		},
 	} {
 		t.Run(row.name, func(t *testing.T) {
-			core, removed, err := PartitionExtension([]byte(row.content), demoAddonRoot)
+			core, removed, err := PartitionExtension([]byte(row.content), demoAddonRoot, demoExtensionPath)
 			require.NoError(t, err)
 			require.Equal(t, ExtensionDependencyTargets{"res://addons/demo/bin/libsupport.dylib": ""},
 				removed[SliceID{Platform: "macos"}].Dependencies["macos.debug"])
@@ -1716,7 +1714,7 @@ macos.debug = {
 			// from the first emission of the partitioned form onward.
 			reassembled, err := ReassembleExtension(core, removed, allSlices(removed))
 			require.NoError(t, err)
-			secondCore, secondRemoved, err := PartitionExtension(reassembled, demoAddonRoot)
+			secondCore, secondRemoved, err := PartitionExtension(reassembled, demoAddonRoot, demoExtensionPath)
 			require.NoError(t, err)
 			require.Equal(t, string(core), string(secondCore))
 			require.Equal(t, removed, secondRemoved)
@@ -1729,7 +1727,7 @@ macos.debug = {
 // these, and reassembly re-checks because an Index may also be assembled in
 // memory by a producer rather than loaded from bytes.
 func TestExtensionReassemblyIsFailClosedOnDependencyTargets(t *testing.T) {
-	core, _, err := PartitionExtension([]byte(bothSectionsExtension), demoAddonRoot)
+	core, _, err := PartitionExtension([]byte(bothSectionsExtension), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)
 	macosSlice := SliceID{Platform: "macos"}
 
@@ -1807,7 +1805,7 @@ func TestExtensionDictionaryDependenciesSurviveTheWholeIndexPath(t *testing.T) {
 
 	const addonRoot = "res://addons/limboai"
 	const extensionPath = "limboai.gdextension"
-	core, removed, err := PartitionExtension(original, addonRoot)
+	core, removed, err := PartitionExtension(original, addonRoot, extensionPath)
 	require.NoError(t, err)
 
 	index := &Index{
@@ -1871,7 +1869,7 @@ func TestExtensionReassemblyOfOneSliceKeepsItsDependencyDestinations(t *testing.
 	original, err := os.ReadFile("testdata/limboai.gdextension")
 	require.NoError(t, err)
 
-	core, removed, err := PartitionExtension(original, "res://addons/limboai")
+	core, removed, err := PartitionExtension(original, "res://addons/limboai", "limboai.gdextension")
 	require.NoError(t, err)
 
 	iosSlice := SliceID{Platform: "ios"}
@@ -1882,4 +1880,611 @@ func TestExtensionReassemblyOfOneSliceKeepsItsDependencyDestinations(t *testing.
 		"ios.release": {"res://addons/limboai/bin/libgodot-cpp.ios.template_release.a": ""},
 	}, targetsOf(t, reassembled))
 	require.NotContains(t, string(reassembled), "android")
+}
+
+// TestExtensionPartitionsGodotJoltsRelativeLibraryPaths is the real-world
+// evidence for relative entry values: every one of godot_jolt's fourteen
+// [libraries] values is written relative to the .gdextension rather than as a
+// res:// path, which is the form Godot documents beside res:// and the only form
+// this widely used addon ships.
+func TestExtensionPartitionsGodotJoltsRelativeLibraryPaths(t *testing.T) {
+	content, err := os.ReadFile("testdata/godot_jolt.gdextension")
+	require.NoError(t, err)
+
+	const addonRoot = "res://addons/godot_jolt"
+	core, removed, err := PartitionExtension(content, addonRoot, "godot_jolt.gdextension")
+	require.NoError(t, err)
+	require.NotContains(t, string(core), "godot-jolt_", "every [libraries] entry must leave the core body")
+
+	// Spelled out in full rather than generated, so the slice each key reduces to
+	// and the res:// path each relative value resolves to are both pinned. The
+	// three Windows keys naming one file, and macos.editor sitting beside
+	// macos.template_release.universal, are the shapes this fixture exists for.
+	require.Equal(t, map[SliceID]ExtensionEntries{
+		{Platform: "windows", Architecture: "x86_64"}: {Libraries: ExtensionEntryTable[string]{
+			"windows.editor.x86_64":           addonRoot + "/bin/godot-jolt_windows_x64.dll",
+			"windows.template_debug.x86_64":   addonRoot + "/bin/godot-jolt_windows_x64.dll",
+			"windows.template_release.x86_64": addonRoot + "/bin/godot-jolt_windows_x64.dll",
+		}},
+		{Platform: "macos"}: {Libraries: ExtensionEntryTable[string]{
+			"macos.editor":           addonRoot + "/bin/godot-jolt_macos.framework",
+			"macos.template_debug":   addonRoot + "/bin/godot-jolt_macos.framework",
+			"macos.template_release": addonRoot + "/bin/godot-jolt_macos.framework",
+		}},
+		{Platform: "macos", Architecture: "universal"}: {Libraries: ExtensionEntryTable[string]{
+			"macos.template_release.universal": addonRoot + "/bin/godot-jolt_macos_universal.framework",
+		}},
+		{Platform: "linux", Architecture: "x86_64"}: {Libraries: ExtensionEntryTable[string]{
+			"linux.editor.x86_64":           addonRoot + "/bin/godot-jolt_linux_x64.so",
+			"linux.template_debug.x86_64":   addonRoot + "/bin/godot-jolt_linux_x64.so",
+			"linux.template_release.x86_64": addonRoot + "/bin/godot-jolt_linux_x64.so",
+		}},
+		{Platform: "android", Architecture: "arm64"}: {Libraries: ExtensionEntryTable[string]{
+			"android.template_debug.arm64":   addonRoot + "/bin/godot-jolt_android_arm64.so",
+			"android.template_release.arm64": addonRoot + "/bin/godot-jolt_android_arm64.so",
+		}},
+		{Platform: "ios", Architecture: "arm64"}: {Libraries: ExtensionEntryTable[string]{
+			"ios.template_debug.arm64":   addonRoot + "/bin/godot-jolt_ios_arm64.dylib",
+			"ios.template_release.arm64": addonRoot + "/bin/godot-jolt_ios_arm64.dylib",
+		}},
+	}, removed)
+
+	entryCount := 0
+	for _, entries := range removed {
+		entryCount += len(entries.Libraries)
+	}
+	require.Equal(t, 14, entryCount, "every one of the fixture's fourteen entries must be partitioned")
+}
+
+// TestExtensionRelativeValuesRoundTripAsCanonicalResourcePaths states the one
+// deliberate difference between a relative-valued file and a res://-valued one:
+// the round trip is semantic rather than byte-identical, because res:// is the
+// single published form. Every section, key, comment, and ordering survives, and
+// each value is the res:// resolution of what the author wrote.
+//
+// The fixpoint still holds from the first emission onward, because a res:// value
+// resolves to itself, which is what keeps a repeat install from dirtying the
+// working tree. That is why this fixture gets its own test rather than joining
+// TestExtensionRoundTripReproducesEveryFixture, whose stronger
+// parsed-content-identity claim keeps holding unweakened for res:// fixtures.
+func TestExtensionRelativeValuesRoundTripAsCanonicalResourcePaths(t *testing.T) {
+	for _, row := range []struct {
+		path          string
+		addonRoot     string
+		extensionPath string
+	}{
+		{
+			path:          "testdata/godot_jolt.gdextension",
+			addonRoot:     "res://addons/godot_jolt",
+			extensionPath: "godot_jolt.gdextension",
+		},
+		{
+			path:          "testdata/synthetic/relative_subdirectory.gdextension",
+			addonRoot:     demoAddonRoot,
+			extensionPath: "extensions/demo.gdextension",
+		},
+		{
+			path:          "testdata/synthetic/mixed_values.gdextension",
+			addonRoot:     demoAddonRoot,
+			extensionPath: demoExtensionPath,
+		},
+	} {
+		t.Run(filepath.Base(row.path), func(t *testing.T) {
+			original, err := os.ReadFile(row.path)
+			require.NoError(t, err)
+
+			core, removed, err := PartitionExtension(original, row.addonRoot, row.extensionPath)
+			require.NoError(t, err)
+			require.NotEmpty(t, removed)
+
+			reassembled, err := ReassembleExtension(core, removed, allSlices(removed))
+			require.NoError(t, err)
+
+			// Section names, key sets, and key ordering within a section must be
+			// the original's; only a relative value's spelling changes.
+			require.Equal(t, sectionNamesOf(t, original), sectionNamesOf(t, reassembled))
+			require.Equal(t, canonicalSectionsOf(t, original, row.addonRoot, row.extensionPath),
+				sectionsOf(t, reassembled),
+				"each value must be the res:// resolution of the original's value")
+
+			// The fixpoint: partitioning the emitted file lands back on the same
+			// core body and the same entries.
+			secondCore, secondRemoved, err := PartitionExtension(reassembled, row.addonRoot, row.extensionPath)
+			require.NoError(t, err)
+			require.Equal(t, string(core), string(secondCore))
+			require.Equal(t, removed, secondRemoved)
+
+			secondReassembled, err := ReassembleExtension(secondCore, secondRemoved, allSlices(secondRemoved))
+			require.NoError(t, err)
+			require.Equal(t, string(reassembled), string(secondReassembled),
+				"emission must be idempotent from the first emission onward")
+		})
+	}
+}
+
+// TestExtensionPartitionResolvesValuesRelativeToTheExtensionFile pins the
+// resolution rule itself at both positions the extension file can sit in: at the
+// addon root, where the value is joined straight to the root, and in a
+// subdirectory, where the file's own directory sits between them.
+func TestExtensionPartitionResolvesValuesRelativeToTheExtensionFile(t *testing.T) {
+	const body = `[configuration]
+
+entry_symbol = "demo_init"
+
+[libraries]
+
+macos.debug = "bin/libdemo.framework"
+windows.release.x86_64 = "nested/bin/libdemo.dll"
+`
+	for _, row := range []struct {
+		name          string
+		extensionPath string
+		expected      ExtensionEntryTable[string]
+	}{
+		{
+			name:          "extension file at the addon root",
+			extensionPath: demoExtensionPath,
+			expected: ExtensionEntryTable[string]{
+				"macos.debug":            demoAddonRoot + "/bin/libdemo.framework",
+				"windows.release.x86_64": demoAddonRoot + "/nested/bin/libdemo.dll",
+			},
+		},
+		{
+			name:          "extension file in a subdirectory",
+			extensionPath: "extensions/inner/demo.gdextension",
+			expected: ExtensionEntryTable[string]{
+				"macos.debug":            demoAddonRoot + "/extensions/inner/bin/libdemo.framework",
+				"windows.release.x86_64": demoAddonRoot + "/extensions/inner/nested/bin/libdemo.dll",
+			},
+		},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			_, removed, err := PartitionExtension([]byte(body), demoAddonRoot, row.extensionPath)
+			require.NoError(t, err)
+			require.Equal(t, map[SliceID]ExtensionEntries{
+				{Platform: "macos"}: {Libraries: ExtensionEntryTable[string]{
+					"macos.debug": row.expected["macos.debug"],
+				}},
+				{Platform: "windows", Architecture: "x86_64"}: {Libraries: ExtensionEntryTable[string]{
+					"windows.release.x86_64": row.expected["windows.release.x86_64"],
+				}},
+			}, removed)
+		})
+	}
+}
+
+// TestExtensionPartitionResolvesRelativeDependencyKeys asserts the rule reaches
+// the deepest position a path occupies: every key of a [dependencies] Dictionary,
+// with the destination beside it untouched because a destination is an export
+// subdirectory rather than a path into the addon.
+func TestExtensionPartitionResolvesRelativeDependencyKeys(t *testing.T) {
+	const content = `[configuration]
+
+entry_symbol = "demo_init"
+
+[dependencies]
+
+macos.debug = { "bin/libsupport.dylib" : "", "data/extra.bin" : "data" }
+ios.release = "bin/libsupport.a"
+`
+	_, removed, err := PartitionExtension([]byte(content), demoAddonRoot, "extensions/demo.gdextension")
+	require.NoError(t, err)
+	require.Equal(t, map[SliceID]ExtensionEntries{
+		{Platform: "macos"}: {Dependencies: ExtensionEntryTable[ExtensionDependencyTargets]{
+			"macos.debug": {
+				demoAddonRoot + "/extensions/bin/libsupport.dylib": "",
+				demoAddonRoot + "/extensions/data/extra.bin":       "data",
+			},
+		}},
+		{Platform: "ios"}: {Dependencies: ExtensionEntryTable[ExtensionDependencyTargets]{
+			"ios.release": {demoAddonRoot + "/extensions/bin/libsupport.a": ""},
+		}},
+	}, removed)
+}
+
+// TestExtensionPartitionRejectsDependencyKeysResolvingToOnePath pins the one
+// place resolution makes a previously distinct pair collide. One Dictionary is
+// one map from a dependency to its destination, so two spellings of one
+// dependency carry two possibly different destinations for one file and are
+// reported rather than silently resolved last-wins.
+func TestExtensionPartitionRejectsDependencyKeysResolvingToOnePath(t *testing.T) {
+	const content = `[configuration]
+
+entry_symbol = "demo_init"
+
+[dependencies]
+
+macos.debug = { "bin/libsupport.dylib" : "", "res://addons/demo/bin/libsupport.dylib" : "frameworks" }
+`
+	core, removed, err := PartitionExtension([]byte(content), demoAddonRoot, demoExtensionPath)
+	requireManifestError(t, err, "bin/libsupport.dylib", "both name", demoAddonRoot+"/bin/libsupport.dylib")
+	require.Nil(t, core)
+	require.Nil(t, removed)
+}
+
+// TestExtensionPartitionAcceptsEntryKeysResolvingToOnePath is the sibling rule
+// one level up: two platform tags legitimately name one file, which is what
+// godot_jolt writes across its three Windows targets, so two entry keys whose
+// values resolve to the same path are accepted however each was spelled.
+// Duplicate entry keys stay rejected.
+func TestExtensionPartitionAcceptsEntryKeysResolvingToOnePath(t *testing.T) {
+	const content = `[configuration]
+
+entry_symbol = "demo_init"
+
+[libraries]
+
+windows.editor.x86_64 = "bin/libdemo.dll"
+windows.template_release.x86_64 = "res://addons/demo/bin/libdemo.dll"
+`
+	_, removed, err := PartitionExtension([]byte(content), demoAddonRoot, demoExtensionPath)
+	require.NoError(t, err)
+	require.Equal(t, ExtensionEntryTable[string]{
+		"windows.editor.x86_64":           demoAddonRoot + "/bin/libdemo.dll",
+		"windows.template_release.x86_64": demoAddonRoot + "/bin/libdemo.dll",
+	}, removed[SliceID{Platform: "windows", Architecture: "x86_64"}].Libraries)
+}
+
+// TestExtensionPartitionAcceptsMixedResourceAndRelativeValues asserts the two
+// input forms mix freely — within one section, across both sections, and within
+// one [dependencies] Dictionary — and converge on the single published form.
+func TestExtensionPartitionAcceptsMixedResourceAndRelativeValues(t *testing.T) {
+	original, err := os.ReadFile("testdata/synthetic/mixed_values.gdextension")
+	require.NoError(t, err)
+
+	core, removed, err := PartitionExtension(original, demoAddonRoot, demoExtensionPath)
+	require.NoError(t, err)
+	require.Equal(t, map[SliceID]ExtensionEntries{
+		{Platform: "macos"}: {
+			Libraries: ExtensionEntryTable[string]{
+				"macos.debug": demoAddonRoot + "/bin/libdemo.framework",
+			},
+			Dependencies: ExtensionEntryTable[ExtensionDependencyTargets]{
+				"macos.debug": {
+					demoAddonRoot + "/bin/libsupport.dylib": "",
+					demoAddonRoot + "/bin/libother.dylib":   "frameworks",
+				},
+			},
+		},
+		{Platform: "windows", Architecture: "x86_64"}: {
+			Libraries: ExtensionEntryTable[string]{
+				"windows.release.x86_64": demoAddonRoot + "/bin/libdemo.dll",
+			},
+			Dependencies: ExtensionEntryTable[ExtensionDependencyTargets]{
+				"windows.release.x86_64": {demoAddonRoot + "/bin/libsupport.dll": ""},
+			},
+		},
+	}, removed)
+
+	reassembled, err := ReassembleExtension(core, removed, allSlices(removed))
+	require.NoError(t, err)
+	for key, value := range pathsOf(t, reassembled)[string(SectionLibraries)] {
+		require.True(t, strings.HasPrefix(value, resourcePrefix),
+			"entry %q was emitted as %q rather than in the single published form", key, value)
+	}
+	for key, targets := range targetsOf(t, reassembled) {
+		for path := range targets {
+			require.True(t, strings.HasPrefix(path, resourcePrefix),
+				"dependency %q of entry %q was emitted as a relative path", path, key)
+		}
+	}
+}
+
+// TestExtensionPartitionIsFailClosedOnRelativeValues asserts every row of the
+// contract's relative-value table at each of the three depths a path occupies —
+// a [libraries] value, a bare-string [dependencies] value, and a key of a
+// [dependencies] Dictionary — because one rule governs all three and a rule that
+// stops one level short of the data is the defect this table exists to prevent.
+func TestExtensionPartitionIsFailClosedOnRelativeValues(t *testing.T) {
+	// Each position renders one authored value into the body of its section, so
+	// the same row runs unchanged at every depth.
+	positions := []struct {
+		name    string
+		section ExtensionSection
+		bodyOf  func(value string) string
+	}{
+		{
+			name:    "libraries value",
+			section: SectionLibraries,
+			bodyOf:  func(value string) string { return fmt.Sprintf("macos.debug = %q", value) },
+		},
+		{
+			name:    "dependencies bare string",
+			section: SectionDependencies,
+			bodyOf:  func(value string) string { return fmt.Sprintf("macos.debug = %q", value) },
+		},
+		{
+			name:    "dependencies dictionary key",
+			section: SectionDependencies,
+			bodyOf:  func(value string) string { return fmt.Sprintf("macos.debug = { %q : \"\" }", value) },
+		},
+	}
+
+	for _, row := range []struct {
+		name            string
+		value           string
+		extensionPath   string
+		expectedMessage []string
+	}{
+		{
+			name:          "traversal that would resolve inside the addon root",
+			value:         "bin/../other/libdemo.dylib",
+			extensionPath: "extensions/demo.gdextension",
+			expectedMessage: []string{
+				"bin/../other/libdemo.dylib", `".."`, "rejected rather than simplified", resourcePrefix,
+			},
+		},
+		{
+			name:          "traversal that would escape the addon root",
+			value:         "../../other/bin/libdemo.dylib",
+			extensionPath: demoExtensionPath,
+			expectedMessage: []string{
+				"../../other/bin/libdemo.dylib", `".."`, "rejected rather than simplified", resourcePrefix,
+			},
+		},
+		{
+			name:            "dot component",
+			value:           "./bin/libdemo.dylib",
+			expectedMessage: []string{"./bin/libdemo.dylib", "simplest form"},
+		},
+		{
+			name:            "empty component",
+			value:           "bin//libdemo.dylib",
+			expectedMessage: []string{"bin//libdemo.dylib", "empty component"},
+		},
+		{
+			name:            "absolute host path",
+			value:           "/usr/local/lib/libdemo.dylib",
+			expectedMessage: []string{"/usr/local/lib/libdemo.dylib", resourcePrefix, "relative to the"},
+		},
+		{
+			name:  "windows separators",
+			value: `bin\libdemo.dll`,
+			// The diagnostic quotes the value, so the separator appears escaped.
+			expectedMessage: []string{`bin\\libdemo.dll`, resourcePrefix, "relative to the", "separators"},
+		},
+		{
+			name:            "another uri scheme",
+			value:           "user://libdemo.dylib",
+			expectedMessage: []string{"user://libdemo.dylib", resourcePrefix, "relative to the"},
+		},
+		{
+			name:            "empty value",
+			value:           "",
+			expectedMessage: []string{resourcePrefix, "relative to the"},
+		},
+		{
+			// validatePartitionedValue runs on the resolved value, so a value that
+			// would not survive being written back is caught whichever form it was
+			// written in.
+			name:            "quote in a relative value",
+			value:           `bin/lib"demo.dylib`,
+			expectedMessage: []string{"must not contain a quote", demoAddonRoot},
+		},
+		// A control character has no row here: the config lexer rejects the escape
+		// that would carry one before any value rule runs. The rule itself is
+		// asserted on the reassembly side, where an index assembled in memory can
+		// carry one.
+	} {
+		for _, position := range positions {
+			t.Run(row.name+"/"+position.name, func(t *testing.T) {
+				content := fmt.Sprintf(
+					"[configuration]\n\nentry_symbol = \"demo_init\"\n\n[%s]\n\n%s\n",
+					position.section, position.bodyOf(row.value),
+				)
+				extensionPath := row.extensionPath
+				if extensionPath == "" {
+					extensionPath = demoExtensionPath
+				}
+				core, removed, err := PartitionExtension([]byte(content), demoAddonRoot, extensionPath)
+				requireManifestError(t, err, row.expectedMessage...)
+				require.Nil(t, core, "a rejected .gdextension must yield no core body")
+				require.Nil(t, removed, "a rejected .gdextension must yield no entries")
+			})
+		}
+	}
+}
+
+// TestExtensionPartitionReportsAResolutionOutsideTheAddonRoot asserts the
+// containment rule still names the value, the resolved path, and the root.
+//
+// A clean relative value cannot reach it: resolution prefixes the addon root and
+// every traversal component is refused before resolution, so containment holds
+// by construction, which
+// TestExtensionResolutionOfACleanRelativeValueStaysInsideTheAddonRoot states as
+// a property. The rule is therefore exercised through the res:// spelling, which
+// is the same single containment rule and the spelling an author is told to use
+// when a relative one cannot express their file.
+func TestExtensionPartitionReportsAResolutionOutsideTheAddonRoot(t *testing.T) {
+	const content = `[configuration]
+
+entry_symbol = "demo_init"
+
+[libraries]
+
+macos.debug = "res://addons/other/bin/libdemo.dylib"
+`
+	core, removed, err := PartitionExtension([]byte(content), demoAddonRoot, demoExtensionPath)
+	requireManifestError(t, err,
+		"res://addons/other/bin/libdemo.dylib", "outside the addon root", demoAddonRoot)
+	require.Nil(t, core)
+	require.Nil(t, removed)
+}
+
+// TestExtensionResolutionOfACleanRelativeValueStaysInsideTheAddonRoot states the
+// by-construction property the containment re-check guards: for every accepted
+// extension path and every accepted relative value, the resolution is inside the
+// addon root. It is what makes "a relative value is not a licence to leave the
+// subtree" true by the shape of the rule rather than by a check that happens to
+// run.
+func TestExtensionResolutionOfACleanRelativeValueStaysInsideTheAddonRoot(t *testing.T) {
+	for _, extensionPath := range []string{
+		"demo.gdextension",
+		"extensions/demo.gdextension",
+		"a/b/c/demo.gdextension",
+	} {
+		for _, value := range []string{
+			"libdemo.dylib",
+			"bin/libdemo.dylib",
+			"bin/nested/deeper/libdemo.dylib",
+			"bin/..name/libdemo.dylib",
+		} {
+			t.Run(extensionPath+"|"+value, func(t *testing.T) {
+				content := fmt.Sprintf(
+					"[configuration]\n\nentry_symbol = \"demo_init\"\n\n[%s]\n\nmacos.debug = %q\n",
+					SectionLibraries, value,
+				)
+				_, removed, err := PartitionExtension([]byte(content), demoAddonRoot, extensionPath)
+				require.NoError(t, err)
+				resolved := removed[SliceID{Platform: "macos"}].Libraries["macos.debug"]
+				require.True(t, strings.HasPrefix(resolved, demoAddonRoot+"/"),
+					"value %q under %q resolved to %q, outside the addon root", value, extensionPath, resolved)
+			})
+		}
+	}
+}
+
+// TestExtensionPartitionRequiresTheExtensionsOwnPath asserts every row of the
+// contract's table for the new parameter. The file's position is never defaulted
+// to the addon root, because defaulting it would resolve a relative value
+// against a directory the file does not sit in and publish a path naming a file
+// that is not there.
+func TestExtensionPartitionRequiresTheExtensionsOwnPath(t *testing.T) {
+	for _, row := range []struct {
+		name            string
+		extensionPath   string
+		expectedMessage []string
+	}{
+		{
+			name:            "empty",
+			extensionPath:   "",
+			expectedMessage: []string{extensionSuffix, "is required"},
+		},
+		{
+			name:            "absolute",
+			extensionPath:   "/addons/demo/demo.gdextension",
+			expectedMessage: []string{"must be relative"},
+		},
+		{
+			name:            "windows separators",
+			extensionPath:   `extensions\demo.gdextension`,
+			expectedMessage: []string{"separators"},
+		},
+		{
+			name:            "names a drive",
+			extensionPath:   "C:/demo.gdextension",
+			expectedMessage: []string{"must be relative"},
+		},
+		{
+			name:            "a resource path rather than a path relative to the addon root",
+			extensionPath:   demoAddonRoot + "/demo.gdextension",
+			expectedMessage: []string{"must be relative"},
+		},
+		{
+			name:            "empty component",
+			extensionPath:   "extensions//demo.gdextension",
+			expectedMessage: []string{"empty component"},
+		},
+		{
+			name:            "dot component",
+			extensionPath:   "./demo.gdextension",
+			expectedMessage: []string{"simplest form"},
+		},
+		{
+			name:            "traversal component",
+			extensionPath:   "../demo.gdextension",
+			expectedMessage: []string{"must not escape the addon root"},
+		},
+		{
+			name:            "does not name a gdextension file",
+			extensionPath:   "demo.cfg",
+			expectedMessage: []string{"demo.cfg", extensionSuffix},
+		},
+		{
+			name:            "is exactly the suffix",
+			extensionPath:   extensionSuffix,
+			expectedMessage: []string{extensionSuffix},
+		},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			core, removed, err := PartitionExtension([]byte(minimalExtension), demoAddonRoot, row.extensionPath)
+			requireManifestError(t, err, row.expectedMessage...)
+			require.Nil(t, core, "a rejected .gdextension must yield no core body")
+			require.Nil(t, removed, "a rejected .gdextension must yield no entries")
+		})
+	}
+}
+
+// TestExtensionPartitionAcceptsAnExtensionPathNamingAnotherFile pins the one row
+// of that table that is accepted and undetectable: the parameter is the caller's
+// assertion about the bytes it handed over, and nothing on disk is consulted, so
+// a mismatch cannot be reported here. The packager owns deriving the path from
+// the same tree walk that read the content.
+func TestExtensionPartitionAcceptsAnExtensionPathNamingAnotherFile(t *testing.T) {
+	_, removed, err := PartitionExtension([]byte(minimalExtension), demoAddonRoot, "somewhere/else.gdextension")
+	require.NoError(t, err)
+	require.NotEmpty(t, removed)
+}
+
+// canonicalSectionsOf renders a fixture's own content into the form a round trip
+// must produce: identical in every respect except that each partitioned entry's
+// path is in the single published res:// form. It reads the fixture rather than
+// hand-copying a list, so a relative-valued fixture's round trip is asserted
+// against the author's file.
+//
+// A [dependencies] destination is deliberately left untouched: it is an export
+// subdirectory rather than a path into the addon, so it is never resolved
+// against the extension's position.
+func canonicalSectionsOf(t *testing.T, content []byte, addonRoot, extensionPath string) map[string]ExtensionEntryTable[string] {
+	t.Helper()
+	directory := ""
+	if separator := strings.LastIndex(extensionPath, "/"); separator >= 0 {
+		directory = extensionPath[:separator] + "/"
+	}
+	canonicalize := func(value string) string {
+		if strings.HasPrefix(value, resourcePrefix) {
+			return value
+		}
+		return addonRoot + "/" + directory + value
+	}
+
+	sections := map[string]ExtensionEntryTable[string]{}
+	for _, section := range parseFixture(t, content).Sections {
+		table := sections[section.Name]
+		if table == nil {
+			table = ExtensionEntryTable[string]{}
+			sections[section.Name] = table
+		}
+		partitioned := slices.Contains(PartitionedSections(), ExtensionSection(section.Name))
+		for _, statement := range section.Statements {
+			assignment, isAssignment := statement.(*ast.Assignment)
+			if !isAssignment {
+				continue
+			}
+			if !partitioned {
+				table[assignment.Key] = formatFixtureValue(assignment)
+				continue
+			}
+			if section.Name == string(SectionDependencies) {
+				targets := dependencyTargetsOfFixtureValue(t, assignment.Value)
+				canonical := ExtensionDependencyTargets{}
+				for path, destination := range targets {
+					canonical[canonicalize(path)] = destination
+				}
+				rendered := make([]string, 0, len(canonical))
+				for _, path := range sortedKeys(canonical) {
+					rendered = append(rendered, fmt.Sprintf("%q -> %q", path, canonical[path]))
+				}
+				table[assignment.Key] = strings.Join(rendered, ", ")
+				continue
+			}
+			literal, isString := assignment.Value.(*ast.StringLiteral)
+			require.True(t, isString, "partitioned entry %q is not a string", assignment.Key)
+			table[assignment.Key] = formatFixtureValue(&ast.Assignment{
+				Key:   assignment.Key,
+				Value: &ast.StringLiteral{Value: canonicalize(literal.Value)},
+			})
+		}
+	}
+	return sections
 }
