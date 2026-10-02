@@ -100,3 +100,32 @@ func TestAddFetchFailureDoesNotPersistManifestEntry(t *testing.T) {
 	_, statErr := os.Stat(filepath.Join(dir, "addons", "x"))
 	require.True(t, os.IsNotExist(statErr))
 }
+
+// TestAddDoesNotChurnTheLockUnderProjectPlatforms pins that the spec_hash `gpm
+// add` writes matches the hash computed when the manifest is loaded afresh. An
+// entry inserted without its resolved platform list would hash differently and
+// force a spurious re-resolve on the very next install.
+func TestAddDoesNotChurnTheLockUnderProjectPlatforms(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "project.godot"), nil, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "addons.toml"),
+		[]byte("[project]\nplatforms = [\"ios.arm64\"]\n\n[addons]\n"), 0o644))
+
+	cmd := newAddCommand(&Options{})
+	testFetcherFor = func(manifest.AddonSpec) (source.Fetcher, error) {
+		return fakeFetcher{version: "1.0"}, nil
+	}
+	defer func() { testFetcherFor = nil }()
+
+	cmd.SetArgs([]string{"--name", "x", "--source", "archive", "--url", "https://example.com/x.zip", "--dir", dir})
+	require.NoError(t, cmd.Execute())
+
+	m, err := manifest.Load(filepath.Join(dir, "addons.toml"))
+	require.NoError(t, err)
+	require.Equal(t, []string{"ios.arm64"}, m.Addons["x"].Platforms)
+
+	lock, err := manifest.LoadLock(filepath.Join(dir, "addons.lock"))
+	require.NoError(t, err)
+	require.Equal(t, m.Addons["x"].Hash(), lock.Addons["x"].SpecHash)
+	require.False(t, manifest.NeedsResolve(m.Addons["x"], lock))
+}

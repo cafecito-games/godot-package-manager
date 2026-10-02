@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cafecito-games/godot-package-manager/internal/output"
@@ -255,4 +256,75 @@ url    = "https://example.com/b.zip"
 	m.Addons["one"].Platforms[0] = "mutated"
 	require.Equal(t, []string{"macos", "windows"}, m.Project.Platforms)
 	require.Equal(t, []string{"macos", "windows"}, m.Addons["two"].Platforms)
+}
+
+// TestSaveDoesNotFreezeInheritedPlatformsIntoOverrides pins the load-modify-save
+// cycle that `gpm add`, `gpm remove`, and the AssetLib wizard all perform. An
+// inherited platform list must not be written back as a per-addon key: that
+// would silently convert every addon into a permanent override, so a later edit
+// to [project] platforms would stop reaching it.
+func TestSaveDoesNotFreezeInheritedPlatformsIntoOverrides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "addons.toml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+[project]
+platforms = ["ios.arm64"]
+
+[addons.inherits]
+source = "archive"
+url    = "https://example.com/a.zip"
+
+[addons.overrides]
+source    = "archive"
+url       = "https://example.com/b.zip"
+platforms = ["macos"]
+`), 0o644))
+
+	m, err := Load(path)
+	require.NoError(t, err)
+	m.Addons["added"] = AddonSpec{Name: "added", Source: SourceArchive, URL: "https://example.com/c.zip"}
+	require.NoError(t, m.Save(path))
+
+	saved, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, 1, strings.Count(string(saved), `platforms = ["ios.arm64"]`),
+		"the project list must appear once, under [project], and never as a per-addon override:\n%s", saved)
+
+	m.Project.Platforms = append(m.Project.Platforms, "android.arm64")
+	require.NoError(t, m.Save(path))
+	reloaded, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ios.arm64", "android.arm64"}, reloaded.Addons["inherits"].Platforms,
+		"an inheriting addon must keep tracking the project list across a save")
+	require.Equal(t, []string{"ios.arm64", "android.arm64"}, reloaded.Addons["added"].Platforms)
+	require.Equal(t, []string{"macos"}, reloaded.Addons["overrides"].Platforms,
+		"a declared override must survive a save")
+}
+
+// TestSetAddonResolvesPlatformsLikeLoad pins that an addon inserted in-process is
+// indistinguishable from one read from disk. `gpm add` inserts a spec and then
+// installs from the same in-memory manifest, so an unresolved entry would both
+// hash differently from its on-disk form and be selected for the wrong slices.
+func TestSetAddonResolvesPlatformsLikeLoad(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "addons.toml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+[project]
+platforms = ["ios.arm64"]
+`), 0o644))
+
+	m, err := Load(path)
+	require.NoError(t, err)
+	m.SetAddon(AddonSpec{Name: "added", Source: SourceArchive, URL: "https://example.com/c.zip"})
+	require.Equal(t, []string{"ios.arm64"}, m.Addons["added"].Platforms)
+
+	require.NoError(t, m.Save(path))
+	reloaded, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, m.Addons["added"].Hash(), reloaded.Addons["added"].Hash(),
+		"a spec_hash written during add must match the hash computed on the next load")
+}
+
+func TestSetAddonKeepsAnExplicitOverride(t *testing.T) {
+	m := &Manifest{Project: ProjectConfig{Platforms: []string{"ios.arm64"}}}
+	m.SetAddon(AddonSpec{Name: "x", Source: SourceArchive, URL: "https://example.com/a.zip", Platforms: []string{"macos"}})
+	require.Equal(t, []string{"macos"}, m.Addons["x"].Platforms)
 }

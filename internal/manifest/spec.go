@@ -41,6 +41,15 @@ type AddonSpec struct {
 	// Index, for an archive source, is the absolute URL of the addon's
 	// gpm-index.toml, marking the archive as sliced.
 	Index string `toml:"index,omitempty"`
+
+	// platformsInherited records that Load filled Platforms from the project
+	// table rather than from the addon's own table. Save consults it so a
+	// load-modify-save cycle — which `gpm add`, `gpm remove`, and the AssetLib
+	// wizard all perform — writes the addon table back as it was read. Without
+	// it, the resolved project list would be written out as a per-addon key and
+	// every addon would silently become a permanent override, deaf to later
+	// edits of [project] platforms.
+	platformsInherited bool
 	// Checksum, when set, is the expected SHA-256 (64 lowercase hex digits) of
 	// the downloaded archive or release asset. It is verified on every fetch,
 	// including the first, for archive and github-release sources.

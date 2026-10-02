@@ -42,14 +42,34 @@ func Load(path string) (*Manifest, error) {
 	}
 	for name, addon := range m.Addons {
 		addon.Name = name
-		if addon.Platforms == nil {
-			// A clone, not the project slice itself, so no later caller can
-			// reach the project list through one addon.
-			addon.Platforms = slices.Clone(m.Project.Platforms)
-		}
-		m.Addons[name] = addon
+		m.Addons[name] = m.resolve(addon)
 	}
 	return m, nil
+}
+
+// SetAddon inserts or replaces one addon entry, keyed by spec.Name, resolving
+// its effective platform list exactly as Load does. `gpm add` and the AssetLib
+// wizard install from the same in-memory manifest they just wrote, so an entry
+// inserted without resolution would hash differently from its on-disk form and
+// be selected for the wrong slices.
+func (m *Manifest) SetAddon(spec AddonSpec) {
+	if m.Addons == nil {
+		m.Addons = map[string]AddonSpec{}
+	}
+	m.Addons[spec.Name] = m.resolve(spec)
+}
+
+// resolve fills in the fields an AddonSpec does not carry in the manifest file.
+// It is the only place the effective platform list is computed; everything else
+// reads AddonSpec.Platforms.
+func (m *Manifest) resolve(addon AddonSpec) AddonSpec {
+	if addon.Platforms == nil {
+		// A clone, not the project slice itself, so no later caller can
+		// reach the project list through one addon.
+		addon.Platforms = slices.Clone(m.Project.Platforms)
+		addon.platformsInherited = true
+	}
+	return addon
 }
 
 // rejectUnknownProjectKeys reports keys the decoder did not consume that live
@@ -74,14 +94,19 @@ func rejectUnknownProjectKeys(path string, metaData toml.MetaData) error {
 
 // Save writes the manifest to path as TOML using an atomic rename so a
 // mid-write failure never leaves a corrupted file at path.
+//
+// An addon whose platform list was inherited from [project] is written without
+// a platforms key, so a load-modify-save cycle preserves inheritance instead of
+// freezing the resolved list into a per-addon override.
 func (m *Manifest) Save(path string) error {
+	encoded := m.withoutInheritedPlatforms()
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".addons-*.tmp")
 	if err != nil {
 		return fmt.Errorf("creating temp manifest: %w", err)
 	}
 	tmpName := tmp.Name()
 
-	if err := toml.NewEncoder(tmp).Encode(m); err != nil {
+	if err := toml.NewEncoder(tmp).Encode(encoded); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("encoding manifest %s: %w", path, err)
@@ -100,4 +125,19 @@ func (m *Manifest) Save(path string) error {
 		return fmt.Errorf("installing manifest %s: %w", path, err)
 	}
 	return nil
+}
+
+// withoutInheritedPlatforms returns a shallow copy of the manifest in which
+// every addon that inherited its platform list carries no list of its own, which
+// is the form the manifest was read in. The receiver is left untouched so a
+// caller that saves and keeps using the manifest still sees resolved platforms.
+func (m *Manifest) withoutInheritedPlatforms() *Manifest {
+	addons := make(map[string]AddonSpec, len(m.Addons))
+	for name, addon := range m.Addons {
+		if addon.platformsInherited {
+			addon.Platforms = nil
+		}
+		addons[name] = addon
+	}
+	return &Manifest{Project: m.Project, Addons: addons}
 }
