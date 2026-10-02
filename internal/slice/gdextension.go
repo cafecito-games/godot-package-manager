@@ -81,6 +81,16 @@ func PartitionExtension(content []byte, addonRoot string) ([]byte, map[SliceID]E
 			if !isAssignment {
 				// A comment inside a partitioned section is content rather than an
 				// entry, so it stays in the core body and no comment is lost.
+				//
+				// Its position relative to the entries cannot also be kept: the
+				// entries are re-emitted sorted by key, which is what makes two
+				// machines installing the same slice set write identical bytes, so
+				// no entry is at its original index any more. The comments of a
+				// partitioned section are therefore kept as one block in their own
+				// original order, and reassembly writes the entries after them —
+				// which is where the comments real .gdextension files carry in these
+				// sections belong, since they are section and group labels such as
+				// "; desktop" or a commented-out entry.
 				kept = append(kept, statement)
 				continue
 			}
@@ -119,9 +129,10 @@ func PartitionExtension(content []byte, addonRoot string) ([]byte, map[SliceID]E
 // .gdextension describing exactly the binaries on disk.
 //
 // Output is deterministic and idempotent: entries are emitted sorted by key
-// within their section, the sections themselves keep the position the author
-// gave them in the core body rather than being reordered, and the body is the
-// config format's canonical spelling. Two machines installing the same slice set
+// within their section, after whatever comments that section carries, the
+// sections themselves keep the position the author gave them in the core body
+// rather than being reordered, and the body is the config format's canonical
+// spelling. Two machines installing the same slice set
 // therefore write identical bytes, and a repeat install does not dirty the
 // working tree. Validation walks PartitionedSections in order, so a file with
 // problems in both sections always reports the same one.

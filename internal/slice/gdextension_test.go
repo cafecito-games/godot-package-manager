@@ -1183,3 +1183,38 @@ func sortedCallerPaths(callers map[string]int) []string {
 	sort.Strings(paths)
 	return paths
 }
+
+// TestExtensionReassemblyWritesEntriesAfterASectionsComments pins where a
+// partitioned section's comments end up, so the placement is a contract rather
+// than an accident.
+//
+// A comment's position relative to the entries cannot be preserved: the entries
+// are re-emitted sorted by key, which is what makes the output deterministic, so
+// none of them is at its original index. The comments are therefore kept as one
+// block in their own original order and the entries follow them. Nothing is
+// dropped, and a comment never turns into an entry.
+func TestExtensionReassemblyWritesEntriesAfterASectionsComments(t *testing.T) {
+	const content = `[libraries]
+
+; desktop
+windows.release.x86_64 = "res://addons/demo/bin/libdemo.dll"
+; mobile
+android.release.arm64 = "res://addons/demo/bin/libdemo.android.so"
+; nothing else is built yet
+`
+	core, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
+	require.NoError(t, err)
+	reassembled, err := ReassembleExtension(core, removed, allSlices(removed))
+	require.NoError(t, err)
+
+	require.Equal(t, "[libraries]\n"+
+		"; desktop\n"+
+		"; mobile\n"+
+		"; nothing else is built yet\n"+
+		"android.release.arm64=\"res://addons/demo/bin/libdemo.android.so\"\n"+
+		"windows.release.x86_64=\"res://addons/demo/bin/libdemo.dll\"\n", string(reassembled))
+	require.Equal(t, commentsOf(t, []byte(content)), commentsOf(t, reassembled),
+		"every comment survives, in its own original order")
+	require.Equal(t, sectionsOf(t, []byte(content)), sectionsOf(t, reassembled),
+		"every entry survives with its value unchanged")
+}
