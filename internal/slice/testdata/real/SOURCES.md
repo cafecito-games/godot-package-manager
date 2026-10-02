@@ -28,6 +28,15 @@ stores a dependency entry as that same dictionary, so the destinations survive t
 the index, and reassembly. It is the real-world evidence for the dictionary rows of the
 fail-closed contract and the fixture the round trip is asserted over.
 
-`godot_jolt.gdextension` ships `[libraries]` values relative to the `.gdextension` instead of
-`res://` paths. It is **rejected** by the fail-closed contract, and is the real-world evidence
-for that row.
+`godot_jolt.gdextension` ships all fourteen of its `[libraries]` values relative to the
+`.gdextension` instead of as `res://` paths, which is the other form Godot accepts and the only
+one this addon uses. It is **accepted**: each value is resolved against the `.gdextension` file's
+own position inside the addon, so `bin/godot-jolt_macos.framework` becomes
+`res://addons/godot_jolt/bin/godot-jolt_macos.framework`, and `res://` is the single form the
+index publishes and reassembly emits. It is the real-world evidence for the relative-value rows of
+the fail-closed contract, and the fixture whose round trip is asserted as semantic rather than
+byte-identical, because the author's spelling is canonicalized on the way into the index.
+
+It is also the real-world evidence for two shapes the grouping rules exist for: its three Windows
+targets name one file, and `macos.editor` sits beside `macos.template_release.universal`, so one
+platform's entries land under both its generic slice and an architecture-specific one.

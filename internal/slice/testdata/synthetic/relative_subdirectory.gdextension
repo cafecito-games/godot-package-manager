@@ -1,0 +1,13 @@
+[configuration]
+
+entry_symbol = "demo_init"
+compatibility_minimum = "4.2"
+
+[libraries]
+
+macos.debug = "lib/libdemo.framework"
+windows.release.x86_64 = "lib/libdemo.dll"
+
+[dependencies]
+
+macos.debug = { "lib/libsupport.dylib" : "", "data/extra.bin" : "data" }

@@ -940,3 +940,43 @@ func TestIndexRejectsAnEntryWrittenInTheWrongTomlType(t *testing.T) {
 		})
 	}
 }
+
+// TestIndexRejectsARelativeEntryValue pins the asymmetry the single published
+// form rests on. A .gdextension's author may write an entry value relative to
+// the .gdextension and gpm resolves it, but the index's one value form is a
+// clean res:// path, so a producer publishing a relative value published
+// something gpm package does not emit. The index is remote content, so that is a
+// FetchError rather than a ManifestError, and the rule is asserted at every
+// depth a path occupies: a [libraries] value and a [dependencies] Dictionary key.
+func TestIndexRejectsARelativeEntryValue(t *testing.T) {
+	require.Equal(t, 1, SupportedIndexFormat,
+		"accepting a relative .gdextension value changes no index schema, so the format is unchanged")
+
+	for _, testCase := range []struct {
+		name     string
+		document string
+		contains []string
+	}{
+		{
+			name: "a libraries value is relative to the .gdextension",
+			document: validIndexTOML +
+				"\n[slices.\"ios.arm64\".libraries.\"limboai.gdextension\"]\n" +
+				"\"ios.template_release\" = \"bin/libai.a\"\n",
+			contains: []string{"ios.template_release", "limboai.gdextension", "bin/libai.a", resourcePrefix},
+		},
+		{
+			name:     "a dependency path is relative to the .gdextension",
+			document: dependencyIndexWith(`{ "bin/dep.a" = "" }`),
+			contains: []string{"dependency path", "bin/dep.a", resourcePrefix},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			index, err := LoadIndex([]byte(testCase.document))
+			require.Nil(t, index)
+			requireFetchError(t, err)
+			for _, fragment := range testCase.contains {
+				require.Contains(t, err.Error(), fragment)
+			}
+		})
+	}
+}

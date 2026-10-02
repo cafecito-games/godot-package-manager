@@ -1,0 +1,13 @@
+[configuration]
+
+entry_symbol = "demo_init"
+
+[libraries]
+
+macos.debug = "bin/libdemo.framework"
+windows.release.x86_64 = "res://addons/demo/bin/libdemo.dll"
+
+[dependencies]
+
+macos.debug = { "bin/libsupport.dylib" : "", "res://addons/demo/bin/libother.dylib" : "frameworks" }
+windows.release.x86_64 = "bin/libsupport.dll"
