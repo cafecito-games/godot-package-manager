@@ -37,6 +37,28 @@ var knownArchitectures = []string{"arm32", "arm64", "rv64", "universal", "wasm32
 // template_release keys and the shorter debug/release forms.
 var knownBuildTargets = []string{"debug", "editor", "release", "template_debug", "template_release"}
 
+// knownPrecisions is the single declaration of the float precision a
+// .gdextension library key may carry. godot-cpp's SCons build emits
+// "<platform>.<architecture>.<precision>.<build target>" keys, so a published
+// addon built the standard way names its precision in every library key.
+//
+// No precision ever appears in a slice ID. A slice carries every precision for
+// its platform, for the same reason it carries every build target: a project
+// chooses between them at export time out of the files the addon shipped.
+var knownPrecisions = []string{"double", "single"}
+
+// knownPlatformVariants is the single declaration of the platform variants a
+// .gdextension library key may carry. Godot spells the iOS simulator as a
+// variant of the ios platform rather than as an architecture, which is why
+// "ios.simulator.release" is a key real addons ship.
+//
+// No variant ever appears in a slice ID. The device and simulator libraries of
+// one platform belong to the same slice: a project targeting iOS needs both —
+// the simulator to run the game on a development Mac, the device slice to
+// export — and splitting them would let a project install one and silently lack
+// the other.
+var knownPlatformVariants = []string{"simulator"}
+
 // KnownPlatforms returns the known Godot platforms in sorted order.
 func KnownPlatforms() []string { return slices.Clone(knownPlatforms) }
 
@@ -45,6 +67,12 @@ func KnownArchitectures() []string { return slices.Clone(knownArchitectures) }
 
 // KnownBuildTargets returns the known Godot build targets in sorted order.
 func KnownBuildTargets() []string { return slices.Clone(knownBuildTargets) }
+
+// KnownPrecisions returns the known Godot float precisions in sorted order.
+func KnownPrecisions() []string { return slices.Clone(knownPrecisions) }
+
+// KnownPlatformVariants returns the known Godot platform variants in sorted order.
+func KnownPlatformVariants() []string { return slices.Clone(knownPlatformVariants) }
 
 // SliceID identifies one published slice of an addon: a Godot platform with an
 // optional architecture, or the platform-independent core slice.

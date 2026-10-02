@@ -143,6 +143,48 @@ func TestReduceLibraryKeyMatchesTheDesignTable(t *testing.T) {
 	}
 }
 
+// TestReduceLibraryKeyDropsEveryNonArchitectureAxis asserts the axes a key may
+// carry besides the architecture, in the shapes real producers emit them:
+// godot-cpp's SCons build names the float precision in every library key, and
+// Godot spells the iOS simulator as a variant of the ios platform. A slice
+// carries all of each axis for its platform, so every one of them reduces away.
+func TestReduceLibraryKeyDropsEveryNonArchitectureAxis(t *testing.T) {
+	rows := []struct {
+		key      string
+		expected string
+	}{
+		// The iOS simulator variant, as SwiftGodot and every SwiftGodot-based
+		// addon ships it: the device and simulator libraries are one slice.
+		{"ios.simulator.debug", "ios"},
+		{"ios.simulator.release", "ios"},
+		{"ios.debug", "ios"},
+		// godot-cpp's four-component keys: platform, architecture, precision,
+		// build target.
+		{"ios.arm64.single.debug", "ios.arm64"},
+		{"ios.arm64.double.release", "ios.arm64"},
+		{"windows.x86_32.single.debug", "windows.x86_32"},
+		{"windows.x86_64.double.release", "windows.x86_64"},
+		{"android.arm64.double.debug", "android.arm64"},
+		{"web.wasm32.single.release", "web.wasm32"},
+		// Precision with no architecture, which is what macOS universal
+		// binaries produce.
+		{"macos.single.debug", "macos"},
+		{"macos.double.release", "macos"},
+		// Every axis at once, in the orders Godot accepts.
+		{"ios.simulator.arm64.double.release", "ios.arm64"},
+		{"ios.arm64.double.release.simulator", "ios.arm64"},
+	}
+
+	for _, row := range rows {
+		reduced, err := ReduceLibraryKey(row.key)
+		require.NoError(t, err, "key %q", row.key)
+		require.Equal(t, row.expected, reduced.String(), "key %q", row.key)
+		roundTripped, err := ParseSliceID(reduced.String())
+		require.NoError(t, err, "reduction of %q must be a parseable slice ID", row.key)
+		require.Equal(t, reduced, roundTripped)
+	}
+}
+
 // TestReduceLibraryKeyAcceptsEveryKeyOfRealGDExtensionFiles feeds the library
 // and dependency keys of checked-in .gdextension files, in the shape published
 // GDExtension addons ship them, through reduction byte-for-byte.
@@ -218,7 +260,10 @@ func TestReduceLibraryKeyIsFailClosed(t *testing.T) {
 		{"unknown third component", "windows.debug.sparc", []string{"sparc", "x86_64", "debug"}},
 		{"two architectures", "ios.arm64.x86_64", []string{"ios.arm64.x86_64"}},
 		{"two build targets", "macos.debug.template_release", []string{"macos.debug.template_release"}},
-		{"more than three components", "windows.debug.x86_64.extra", []string{"windows.debug.x86_64.extra"}},
+		{"two float precisions", "macos.single.double.debug", []string{"macos.single.double.debug", "two float precisions"}},
+		{"two platform variants", "ios.simulator.simulator.release", []string{"ios.simulator.simulator.release", "two platform variants"}},
+		{"unknown component beside a precision", "macos.single.sparc.debug", []string{"sparc", "double, single", "simulator"}},
+		{"more than five components", "ios.simulator.arm64.double.release.extra", []string{"ios.simulator.arm64.double.release.extra", "at most 5 components"}},
 		{"empty string", "", nil},
 		{"whitespace only", "  ", nil},
 		{"leading dot", ".macos.debug", nil},
