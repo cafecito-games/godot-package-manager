@@ -53,7 +53,24 @@ type ArchiveFetcher struct {
 
 // Fetch downloads spec.URL, extracts it into a new temp directory, and reports
 // the archive's SHA-256 checksum.
+//
+// When the manifest sets `index` the addon is sliced instead: the index names
+// the archives, only the slices this project needs are downloaded, and the
+// merged tree is still one directory, so nothing downstream changes.
 func (f *ArchiveFetcher) Fetch(ctx context.Context, spec manifest.AddonSpec) (FetchResult, error) {
+	resolve := archiveSliceResolver(spec.Index)
+	if indexURL, sliced := slicedIndexURL(spec, resolve); sliced {
+		fetcher := &slicedFetcher{
+			client:         f.client,
+			maxBytes:       f.maxBytes,
+			maxExtracted:   f.maxExtracted,
+			resolve:        resolve,
+			stagingPattern: "gpm-archive-*",
+			diagnostics:    archiveSlicedDiagnostics(spec),
+		}
+		return fetcher.fetch(ctx, spec, indexURL)
+	}
+
 	archivePath, checksum, err := downloadToFile(ctx, f.client, spec.URL, nil, f.maxBytes)
 	if err != nil {
 		return FetchResult{}, err
@@ -162,16 +179,32 @@ func downloadToFile(ctx context.Context, client *http.Client, rawURL string, hea
 	return tmp.Name(), hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
-// extractArchive extracts the archive at archivePath into dir, choosing zip vs
-// tar.gz based on nameHint's file extension. maxExtracted <= 0 uses the
-// package default cap.
+// extractArchive extracts the archive at archivePath into dir under a guard of
+// its own, which is the single-archive case every unsliced fetch takes.
+// maxExtracted <= 0 uses the package default cap.
 func extractArchive(nameHint, archivePath, dir string, maxExtracted int64) error {
+	return extractArchiveInto(nameHint, archivePath, dir, newExtractGuard(maxExtracted), nil)
+}
+
+// extractArchiveInto extracts the archive at archivePath into dir, choosing zip
+// vs tar.gz based on nameHint's file extension.
+//
+// The guard is the caller's rather than this function's, so several archives
+// merged into one directory share one budget and the extracted-size cap means
+// what the flag says instead of being multiplied by the number of archives.
+//
+// claim, when non-nil, is called with each regular file's path relative to dir
+// before that file is written. A merge uses it to refuse two archives shipping
+// one path rather than letting the last one extracted win, and because the check
+// happens before the write, the refusal leaves the earlier archive's file as it
+// was.
+func extractArchiveInto(nameHint, archivePath, dir string, guard *extractGuard, claim func(relative string) error) error {
 	archiveName := archiveNameForDetection(nameHint)
 	switch {
 	case strings.HasSuffix(archiveName, ".zip"):
-		return extractZip(archivePath, dir, maxExtracted)
+		return extractZip(archivePath, dir, guard, claim)
 	case strings.HasSuffix(archiveName, ".tar.gz"), strings.HasSuffix(archiveName, ".tgz"):
-		return extractTarGz(archivePath, dir, maxExtracted)
+		return extractTarGz(archivePath, dir, guard, claim)
 	default:
 		return &output.FetchError{Err: fmt.Errorf("unsupported archive type: %s", nameHint)}
 	}
@@ -184,26 +217,46 @@ func archiveNameForDetection(nameHint string) string {
 	return strings.ToLower(nameHint)
 }
 
-// extractGuard enforces per-archive limits on entry count and total
-// uncompressed size.
+// extractGuard enforces limits on entry count and total uncompressed size over
+// everything extracted under it. One guard covers one archive for an unsliced
+// fetch and every merged archive for a sliced one.
 type extractGuard struct {
 	files    int
 	bytes    int64
 	maxBytes int64
+	// overBudget builds the error reported when a limit is exceeded. It exists
+	// because the answer depends on what the budget bounds: one archive the
+	// installer is unpacking, or a set of remote archives an index asked the
+	// project to download.
+	overBudget func(error) error
 }
 
 func newExtractGuard(maxBytes int64) *extractGuard {
 	if maxBytes <= 0 {
 		maxBytes = maxExtractedBytes
 	}
-	return &extractGuard{maxBytes: maxBytes}
+	return &extractGuard{
+		maxBytes:   maxBytes,
+		overBudget: func(err error) error { return &output.InstallError{Err: err} },
+	}
+}
+
+// newMergeExtractGuard builds the single guard a sliced merge shares across
+// every slice archive it extracts. It reports a limit as an *output.FetchError
+// rather than an *output.InstallError: the budget bounds the merged tree the
+// index asked the project to download, so exceeding it says the publisher ships
+// more than the project allows rather than that the local filesystem refused a
+// write.
+func newMergeExtractGuard(maxBytes int64) *extractGuard {
+	guard := newExtractGuard(maxBytes)
+	guard.overBudget = func(err error) error { return &output.FetchError{Err: err} }
+	return guard
 }
 
 func (g *extractGuard) addFile() error {
 	g.files++
 	if g.files > maxExtractedFiles {
-		return &output.InstallError{Err: fmt.Errorf(
-			"archive contains more than %d entries", maxExtractedFiles)}
+		return g.overBudget(fmt.Errorf("archive contains more than %d entries", maxExtractedFiles))
 	}
 	return nil
 }
@@ -211,20 +264,19 @@ func (g *extractGuard) addFile() error {
 func (g *extractGuard) addBytes(n int64) error {
 	g.bytes += n
 	if g.bytes > g.maxBytes {
-		return &output.InstallError{Err: fmt.Errorf(
-			"archive expands beyond the maximum extracted size of %d bytes", g.maxBytes)}
+		return g.overBudget(fmt.Errorf(
+			"archive expands beyond the maximum extracted size of %d bytes", g.maxBytes))
 	}
 	return nil
 }
 
-func extractZip(archivePath, dir string, maxExtracted int64) error {
+func extractZip(archivePath, dir string, guard *extractGuard, claim func(relative string) error) error {
 	reader, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return &output.InstallError{Err: err}
 	}
 	defer func() { _ = reader.Close() }()
 
-	guard := newExtractGuard(maxExtracted)
 	for _, zipFile := range reader.File {
 		dest, err := safeJoin(dir, zipFile.Name)
 		if err != nil {
@@ -239,6 +291,9 @@ func extractZip(archivePath, dir string, maxExtracted int64) error {
 				return &output.InstallError{Err: err}
 			}
 			continue
+		}
+		if err := claimExtractedPath(claim, dir, dest); err != nil {
+			return err
 		}
 		if err := guard.addFile(); err != nil {
 			return err
@@ -259,7 +314,7 @@ func extractZip(archivePath, dir string, maxExtracted int64) error {
 	return nil
 }
 
-func extractTarGz(archivePath, dir string, maxExtracted int64) error {
+func extractTarGz(archivePath, dir string, guard *extractGuard, claim func(relative string) error) error {
 	file, err := os.Open(archivePath)
 	if err != nil {
 		return &output.InstallError{Err: err}
@@ -271,7 +326,6 @@ func extractTarGz(archivePath, dir string, maxExtracted int64) error {
 	}
 	defer func() { _ = gzipReader.Close() }()
 
-	guard := newExtractGuard(maxExtracted)
 	tarReader := tar.NewReader(gzipReader)
 	for {
 		header, err := tarReader.Next()
@@ -291,6 +345,9 @@ func extractTarGz(archivePath, dir string, maxExtracted int64) error {
 				return &output.InstallError{Err: err}
 			}
 		case tar.TypeReg:
+			if err := claimExtractedPath(claim, dir, dest); err != nil {
+				return err
+			}
 			if err := guard.addFile(); err != nil {
 				return err
 			}
@@ -317,6 +374,21 @@ func safeJoin(base, name string) (string, error) {
 	return dest, nil
 }
 
+// claimExtractedPath offers one entry's destination to the merge's claim hook as
+// a path relative to the extraction directory, which is the identity two
+// archives would collide on. A nil hook is the single-archive case, where there
+// is nothing to collide with.
+func claimExtractedPath(claim func(relative string) error, dir, dest string) error {
+	if claim == nil {
+		return nil
+	}
+	relative, err := filepath.Rel(filepath.Clean(dir), dest)
+	if err != nil {
+		return &output.InstallError{Err: err}
+	}
+	return claim(filepath.ToSlash(relative))
+}
+
 // writeFile writes reader into dest, enforcing the guard's total-size cap so a
 // single entry cannot expand the archive past the guard's maximum.
 func writeFile(dest string, reader io.Reader, mode os.FileMode, guard *extractGuard) error {
@@ -331,4 +403,17 @@ func writeFile(dest string, reader io.Reader, mode os.FileMode, guard *extractGu
 		return &output.InstallError{Err: err}
 	}
 	return guard.addBytes(written)
+}
+
+// archiveSlicedDiagnostics reports the manifest fields a sliced archive source
+// ignores. A sliced addon's archives are named by its index, so `url` names no
+// archive gpm downloads; the manifest still requires it for every archive
+// source, so saying so is better than letting a stale URL look load-bearing.
+func archiveSlicedDiagnostics(spec manifest.AddonSpec) []string {
+	if spec.URL == "" {
+		return nil
+	}
+	return []string{fmt.Sprintf(
+		"addon %q is sliced, so its archives are named by %s and `url` (%s) is not downloaded",
+		spec.Name, spec.Index, spec.URL)}
 }

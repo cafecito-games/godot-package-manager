@@ -6,13 +6,42 @@ import (
 
 	"github.com/cafecito-games/godot-package-manager/internal/manifest"
 	"github.com/cafecito-games/godot-package-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/slice"
 )
 
 // FetchResult is the outcome of fetching an addon source into a temp directory.
+//
+// The slice fields describe a sliced fetch, where the addon ships several
+// archives described by a gpm-index.toml and only the ones this project needs
+// were downloaded. They are all zero-valued for an unsliced fetch, which is
+// every git source and every release or archive that publishes no index.
 type FetchResult struct {
 	Dir             string // local path to the fetched tree
 	ResolvedVersion string // commit SHA (git) or release tag actually obtained
-	Checksum        string // SHA-256 of the archive/asset; empty for git sources
+	Checksum        string // SHA-256 of the archive/asset; empty for git and sliced sources
+
+	// IndexChecksum is the SHA-256 of the raw gpm-index.toml bytes, computed
+	// before parsing so that a change altering only how the index parses cannot
+	// evade the pin. Comparing it against the lockfile belongs to the caller:
+	// a Fetcher never sees the lock.
+	IndexChecksum string
+
+	// PublishedSlices is every slice the index publishes, sorted by slice ID,
+	// including the ones this fetch did not download. It is the whole published
+	// set rather than the installed one, which is what keeps a lockfile written
+	// from it machine-independent.
+	PublishedSlices []SliceResult
+
+	// InstalledSlices is the subset actually downloaded, verified, and merged
+	// into Dir, sorted by slice ID. It is what this machine has materialized,
+	// as opposed to what the addon publishes.
+	InstalledSlices []slice.SliceID
+
+	// Diagnostics are notes about the fetch that are not failures: a host the
+	// addon publishes no slice for, or a manifest field the sliced path ignores.
+	// They travel on FetchResult because it is the only channel by which a fetch
+	// outcome reaches the caller, and a Fetcher writes to no stream of its own.
+	Diagnostics []string
 }
 
 // Fetcher retrieves an addon source into a local temporary directory.

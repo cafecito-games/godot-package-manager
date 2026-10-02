@@ -12,7 +12,10 @@ import (
 )
 
 // IndexFileName is the index `gpm package` writes beside the slice archives.
-const IndexFileName = "gpm-index.toml"
+// It is an alias of the slice package's declaration rather than a second
+// literal: the consumer discovers a sliced addon by exactly this asset name, so
+// one spelling has to serve both halves forever.
+const IndexFileName = slice.IndexFileName
 
 // DefaultOutputDirectory is where archives and the index go when --out is not
 // given. It is relative to the addon repository's root.
@@ -714,7 +717,7 @@ func requireIdentityOutsideAddonSubtree(outputDirectory, addonRoot string, addon
 // to say so. The spec describes only this layout, so it is required rather than
 // guessed at.
 func requireInstallPath(name, addonPath string) error {
-	expected := "addons/" + name
+	expected := slice.AddonInstallPath(name)
 	if addonPath == expected {
 		return nil
 	}
