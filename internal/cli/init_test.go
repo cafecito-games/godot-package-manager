@@ -78,15 +78,15 @@ func TestInitGitignoresTheStateFile(t *testing.T) {
 	})
 }
 
-// TestInitLeavesNoManifestWhenTheGitignoreWriteFails pins that a failed init
+// TestInitLeavesNoManifestWhenTheGitignoreIsUnusable pins that a failed init
 // performs no mutation it cannot retry: the idempotent .gitignore entry is
-// written first, so a failure there leaves no addons.toml for the retry to trip
+// handled first, so a failure there leaves no addons.toml for the retry to trip
 // over.
-func TestInitLeavesNoManifestWhenTheGitignoreWriteFails(t *testing.T) {
+func TestInitLeavesNoManifestWhenTheGitignoreIsUnusable(t *testing.T) {
 	dir := t.TempDir()
-	// A directory where .gitignore belongs is neither readable nor writable as
-	// a file, without depending on the suite's effective user as a mode-based
-	// test would.
+	// A directory where .gitignore belongs is not a file gpm will write, and it
+	// gets there without depending on the suite's effective user as a
+	// mode-based test would.
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".gitignore"), 0o755))
 
 	cmd := newInitCommand(&Options{})
@@ -95,4 +95,27 @@ func TestInitLeavesNoManifestWhenTheGitignoreWriteFails(t *testing.T) {
 
 	_, err := os.Stat(filepath.Join(dir, "addons.toml"))
 	require.True(t, os.IsNotExist(err), "a failed init must not leave a manifest behind")
+}
+
+// TestInitRefusesToWriteThroughAGitignoreSymlink pins that a
+// repository-controlled path is not followed. Git stores symbolic links
+// faithfully, so a cloned repository could otherwise point .gitignore at any
+// writable file and have `gpm init` append to it.
+func TestInitRefusesToWriteThroughAGitignoreSymlink(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.conf")
+	require.NoError(t, os.WriteFile(outside, []byte("do not touch\n"), 0o644))
+	require.NoError(t, os.Symlink(outside, filepath.Join(dir, ".gitignore")))
+
+	cmd := newInitCommand(&Options{})
+	cmd.SetArgs([]string{"--dir", dir})
+	err := cmd.Execute()
+	require.Error(t, err)
+	var manifestErr *output.ManifestError
+	require.ErrorAs(t, err, &manifestErr)
+
+	require.Equal(t, "do not touch\n", string(readFileBytes(t, outside)),
+		"the symlink target must be untouched")
+	_, statErr := os.Stat(filepath.Join(dir, "addons.toml"))
+	require.True(t, os.IsNotExist(statErr))
 }

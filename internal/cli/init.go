@@ -77,6 +77,19 @@ func newInitCommand(opts *Options) *cobra.Command {
 // already ignores it changes nothing.
 func ignoreStateFile(dir string) error {
 	gitignorePath := filepath.Join(dir, ".gitignore")
+	// Checked without following links, and refused rather than followed: a
+	// cloned repository controls this path, and git stores symbolic links
+	// faithfully, so appending through one would rewrite whatever it points at
+	// anywhere on the filesystem. The rest of gpm treats repository-controlled
+	// paths the same way.
+	info, err := os.Lstat(gitignorePath)
+	switch {
+	case err == nil && !info.Mode().IsRegular():
+		return &output.ManifestError{Err: fmt.Errorf(
+			"%s is not a regular file; gpm will not write through it", gitignorePath)}
+	case err != nil && !errors.Is(err, fs.ErrNotExist):
+		return &output.ManifestError{Err: fmt.Errorf("inspecting %s: %w", gitignorePath, err)}
+	}
 	existing, err := os.ReadFile(gitignorePath)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return &output.ManifestError{Err: fmt.Errorf("reading %s: %w", gitignorePath, err)}

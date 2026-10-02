@@ -172,3 +172,61 @@ func TestAnEmptyStatePathDisablesTheRecord(t *testing.T) {
 		require.NotEqual(t, project.StateFileName, entry.Name())
 	}
 }
+
+// TestAFailedLockWriteLeavesNothingVouchedFor pins the recovery direction after
+// a partial write. An install that put new bytes on disk and then could not
+// persist the pin must not leave a state record that the old pin still matches:
+// the next run would skip fetching and exit successfully with contents the lock
+// does not describe.
+func TestAFailedLockWriteLeavesNothingVouchedFor(t *testing.T) {
+	projectRoot := t.TempDir()
+	statePath := filepath.Join(projectRoot, project.StateFileName)
+	addonsDir := filepath.Join(projectRoot, "addons")
+	addonManifest := &manifest.Manifest{Addons: map[string]manifest.AddonSpec{
+		"dlg": {Name: "dlg", Source: manifest.SourceArchive, URL: "u"},
+	}}
+
+	// A healthy first install, so there is a state record to go stale.
+	calls := 0
+	runner := &Runner{
+		AddonsDir: addonsDir,
+		LockPath:  filepath.Join(projectRoot, "addons.lock"),
+		StatePath: statePath,
+		FetcherFor: func(manifest.AddonSpec) (source.Fetcher, error) {
+			return countingFetcher{version: "1.0", calls: &calls}, nil
+		},
+	}
+	_, err := runner.InstallAddons(context.Background(), addonManifest, nil, ModeInstall)
+	require.NoError(t, err)
+	state, err := manifest.LoadState(statePath)
+	require.NoError(t, err)
+	require.Contains(t, state.Addons, "dlg")
+
+	// An update installs new contents and then cannot persist the new pin. A
+	// lock path inside a directory that does not exist loads as an absent
+	// lockfile and fails to save, without depending on the suite's effective
+	// user as a mode-based test would.
+	broken := &Runner{
+		AddonsDir: addonsDir,
+		LockPath:  filepath.Join(projectRoot, "absent", "addons.lock"),
+		StatePath: statePath,
+		FetcherFor: func(manifest.AddonSpec) (source.Fetcher, error) {
+			return fakeFetcher{version: "2.0", checksum: "cafebabe"}, nil
+		},
+	}
+	_, err = broken.InstallAddons(context.Background(), addonManifest, nil, ModeUpdate)
+	require.Error(t, err)
+
+	state, err = manifest.LoadState(statePath)
+	require.NoError(t, err)
+	require.NotContains(t, state.Addons, "dlg",
+		"a run that changed the disk and could not persist the pin must vouch for nothing")
+
+	// With the filesystem healthy again, the addon is re-materialized rather
+	// than assumed current: the lock still pins the old version while the disk
+	// holds the new bytes, and only the dropped state record forces the fetch.
+	callsBefore := calls
+	_, err = runner.InstallAddons(context.Background(), addonManifest, nil, ModeInstall)
+	require.NoError(t, err)
+	require.Equal(t, callsBefore+1, calls)
+}

@@ -152,6 +152,18 @@ func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Mani
 			return nil, err
 		}
 
+		// The state record is dropped before the install rather than after it,
+		// so that from here until both files are written this machine claims
+		// nothing about the addon. Any failure in between — the install, the
+		// lock write, the state write — therefore leaves a disk whose contents
+		// no state entry vouches for, and the next run re-materializes it.
+		// Writing the record afterwards alone would not do: an install that
+		// succeeded and a lock write that then failed would leave new bytes on
+		// disk under an old pin that the old state record still matched.
+		if err := r.forgetState(state, spec.Name); err != nil {
+			return nil, err
+		}
+
 		err = installer.Install(fetched, spec, r.AddonsDir)
 		_ = os.RemoveAll(fetched.Dir)
 		if err != nil {
@@ -162,9 +174,10 @@ func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Mani
 		if err := lock.Save(r.LockPath); err != nil {
 			return nil, err
 		}
-		// Written only after a successful install, so state never claims slices
-		// that are not on disk. The reverse — on disk but unrecorded — only
-		// costs the next run a re-materialization.
+		// Recorded only once the install and the pin it was measured against
+		// are both durable, so state never claims slices that are not on disk
+		// or that the lock does not pin. The reverse — on disk but unrecorded —
+		// only costs the next run a re-materialization.
 		stateEntry := stateEntryFor(lockEntry, fetched)
 		state.Addons[spec.Name] = stateEntry
 		if err := r.saveState(state); err != nil {
@@ -223,6 +236,17 @@ func (r *Runner) loadState() (*manifest.State, error) {
 		return nil, err
 	}
 	return state, nil
+}
+
+// forgetState drops the record for one addon and persists that immediately, so
+// the window in which this machine is about to change what is on disk is a
+// window in which it claims nothing about it.
+func (r *Runner) forgetState(state *manifest.State, name string) error {
+	if _, found := state.Addons[name]; !found {
+		return nil
+	}
+	delete(state.Addons, name)
+	return r.saveState(state)
 }
 
 func (r *Runner) saveState(state *manifest.State) error {
