@@ -9,6 +9,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/cafecito-games/godot-package-manager/internal/output"
+	"github.com/cafecito-games/godot-package-manager/internal/slice"
 )
 
 // LockEntry pins one resolved addon for reproducible installs.
@@ -17,9 +18,24 @@ type LockEntry struct {
 	SourcePath      string `toml:"source_path"`        // subtree actually installed
 	Checksum        string `toml:"checksum,omitempty"` // SHA-256 for archive/release; empty for git
 	SpecHash        string `toml:"spec_hash"`          // AddonSpec.Hash() it was resolved from
+
+	// Slices maps every slice ID published by the addon's index to that
+	// slice archive's SHA-256. It records the whole published set rather
+	// than only the slices installed here, which is what keeps the lock
+	// machine-independent: two contributors on different hosts write the
+	// same table. An unsliced addon leaves this nil and uses Checksum.
+	Slices map[string]string `toml:"slices,omitempty"`
+
+	// IndexChecksum is the SHA-256 of the raw gpm-index.toml bytes the
+	// Slices table was read from, so a retagged release cannot silently
+	// repoint slice archives. It is set exactly when Slices is set.
+	IndexChecksum string `toml:"index_sha256,omitempty"`
 }
 
-// Lockfile is the parsed contents of addons.lock.
+// Lockfile is the parsed contents of addons.lock. It is shared, committed, and
+// machine-independent: it is the single authority for what an install must
+// verify. What a particular machine has actually materialized on disk is a
+// separate question, answered by State.
 type Lockfile struct {
 	Addons map[string]LockEntry `toml:"addons"`
 }
@@ -41,7 +57,59 @@ func LoadLock(path string) (*Lockfile, error) {
 	if lockfile.Addons == nil {
 		lockfile.Addons = map[string]LockEntry{}
 	}
+	if err := lockfile.Validate(); err != nil {
+		return nil, err
+	}
 	return lockfile, nil
+}
+
+// Validate checks every lock entry for internally consistent slice pins. It
+// returns an *output.ManifestError describing the first problem found, so a
+// malformed lockfile fails at load rather than part-way through an install.
+//
+// Slice ID validity is delegated entirely to internal/slice; this package
+// re-declares no part of the platform vocabulary. The pre-existing
+// ResolvedVersion, SourcePath, and Checksum fields are deliberately left
+// unchecked: lockfiles written by earlier versions must keep loading unchanged.
+func (lockfile *Lockfile) Validate() error {
+	for name, entry := range lockfile.Addons {
+		if err := validateLockEntry(name, entry); err != nil {
+			return &output.ManifestError{Err: err}
+		}
+	}
+	return nil
+}
+
+// validateLockEntry checks one lock entry. An addon is either sliced (slices
+// plus index_sha256) or unsliced (checksum), never both.
+func validateLockEntry(name string, entry LockEntry) error {
+	if entry.Slices == nil && entry.IndexChecksum == "" {
+		return nil
+	}
+	if entry.Checksum != "" {
+		return fmt.Errorf("addon %q: must not set both checksum and slices; an addon is either sliced or it is not", name)
+	}
+	if entry.IndexChecksum == "" {
+		return fmt.Errorf("addon %q: slices requires index_sha256; a sliced entry without its index pin cannot be verified", name)
+	}
+	if entry.Slices == nil {
+		return fmt.Errorf("addon %q: index_sha256 requires a slices table; an addon is either sliced or it is not", name)
+	}
+	if err := validateChecksum(entry.IndexChecksum); err != nil {
+		return fmt.Errorf("addon %q: invalid index_sha256: %w", name, err)
+	}
+	if _, ok := entry.Slices[slice.CorePlatform]; !ok {
+		return fmt.Errorf("addon %q: slices must record the %q slice", name, slice.CorePlatform)
+	}
+	for sliceID, checksum := range entry.Slices {
+		if _, err := slice.ParseSliceID(sliceID); err != nil {
+			return fmt.Errorf("addon %q: invalid slices key: %w", name, err)
+		}
+		if err := validateChecksum(checksum); err != nil {
+			return fmt.Errorf("addon %q: invalid checksum for slice %q: %w", name, sliceID, err)
+		}
+	}
+	return nil
 }
 
 // Save writes the lockfile to path as TOML using an atomic rename so a
