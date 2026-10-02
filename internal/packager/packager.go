@@ -642,10 +642,12 @@ func prepareOutputDirectory(repositoryRoot, outputDirectory string, tree *addonT
 	}
 	// Checked again once the directory exists, this time by file identity rather
 	// than by comparing strings. The lexical check above catches the ordinary
-	// mistake before anything is created; this one catches every spelling that
-	// only reaches the addon subtree indirectly — through a symlinked ancestor,
-	// through a hard link, or through a case alias on a case-insensitive
-	// filesystem — none of which a string comparison can see.
+	// mistake before anything is created; this one catches the spellings that
+	// reach the addon subtree without looking like it — most commonly a case
+	// alias, which is the default on macOS: --out addons/myaddon/dist with
+	// addon_path addons/MyAddon names the same directory on disk, and
+	// filepath.EvalSymlinks keeps the spelling it was given, so no string
+	// comparison can see it.
 	addonInfo, err := tree.addonInfo()
 	if err != nil {
 		return "", err
@@ -678,8 +680,16 @@ func requireOutsideAddonSubtree(outputDirectory, addonRoot string) error {
 // themselves rather than the paths that name them.
 //
 // It walks from the output directory up to the filesystem root, so a path whose
-// spelling differs from the addon root's — a different case, a symlinked
-// component, a hard-linked directory — is still recognized as being inside it.
+// spelling differs from the addon root's — most realistically a different case
+// on a case-insensitive filesystem, which macOS uses by default — is still
+// recognized as being inside it.
+//
+// os.SameFile compares device and inode, so what this catches is one directory
+// reached by two names. It does not detect a same-path replacement where the
+// inode is reused: a directory removed and recreated at the same path can be
+// handed the inode it just freed, as Linux routinely does, and the comparison
+// then succeeds. This is a guard against an author naming their own addon
+// subtree as the output directory, not against a race.
 func requireIdentityOutsideAddonSubtree(outputDirectory, addonRoot string, addonInfo fs.FileInfo) error {
 	// Resolved before the ascent, not during it. Ascending the path as written
 	// would compare the right directory at the bottom and the wrong ones above
