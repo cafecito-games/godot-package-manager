@@ -15,6 +15,12 @@ import (
 // Validate checks every addon entry for required and consistent fields.
 // It returns an *output.ManifestError describing the first problem found.
 func (m *Manifest) Validate() error {
+	// The project platform list is checked on its own rather than only
+	// through the addons that inherit it, so a typo is reported even in a
+	// manifest that declares no addons yet.
+	if err := validateDeclaredPlatforms(m.Project.Platforms); err != nil {
+		return &output.ManifestError{Err: fmt.Errorf("[project]: %w", err)}
+	}
 	for name, addon := range m.Addons {
 		if err := validateSpec(name, addon); err != nil {
 			return &output.ManifestError{Err: err}
@@ -82,6 +88,19 @@ func hasWindowsDrivePrefix(value string) bool {
 	}
 	first := value[0]
 	return (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z')
+}
+
+// validateDeclaredPlatforms checks every entry of a manifest platforms list.
+// Platform, architecture, and build-target vocabulary is owned entirely by
+// internal/slice; this package names no platform of its own and defers to
+// ParseDeclaredPlatform, which also rejects the implicit core slice.
+func validateDeclaredPlatforms(platforms []string) error {
+	for _, platform := range platforms {
+		if _, err := slice.ParseDeclaredPlatform(platform); err != nil {
+			return fmt.Errorf("invalid platforms entry: %w", err)
+		}
+	}
+	return nil
 }
 
 // validateChecksum rejects checksum values that are not a bare SHA-256 digest.
@@ -177,6 +196,22 @@ func validateSpec(name string, addon AddonSpec) error {
 	for _, excludePath := range addon.Exclude {
 		if err := validateExcludePath(excludePath); err != nil {
 			return fmt.Errorf("addon %q: invalid exclude: %w", name, err)
+		}
+	}
+	if err := validateDeclaredPlatforms(addon.Platforms); err != nil {
+		return fmt.Errorf("addon %q: %w", name, err)
+	}
+	if addon.Index != "" {
+		// Slices are published artifacts, so an index only makes sense for a
+		// bare archive URL. A git source is a checkout with no published
+		// artifacts, and a github-release source discovers its index from the
+		// release asset list, so an index field there would be a second,
+		// conflicting source of truth.
+		if addon.Source != SourceArchive {
+			return fmt.Errorf("addon %q: index is only supported for archive sources, not %q", name, addon.Source)
+		}
+		if err := validateArchiveURL(addon.Index); err != nil {
+			return fmt.Errorf("addon %q: invalid index: %w", name, err)
 		}
 	}
 	if addon.Checksum != "" {

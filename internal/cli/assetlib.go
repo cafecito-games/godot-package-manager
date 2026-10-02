@@ -296,7 +296,7 @@ func addAndInstallAssetLibSpec(
 	if err := single.Validate(); err != nil {
 		return err
 	}
-	addonManifest.Addons[spec.Name] = spec
+	addonManifest.SetAddon(spec)
 	if err := addonManifest.Save(discovered.ManifestPath); err != nil {
 		return err
 	}

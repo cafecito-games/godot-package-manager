@@ -55,7 +55,7 @@ func newAddCommand(opts *Options) *cobra.Command {
 			if err := single.Validate(); err != nil {
 				return err
 			}
-			addonManifest.Addons[spec.Name] = spec
+			addonManifest.SetAddon(spec)
 			// Persist the manifest before installing so the success path has no
 			// trailing fallible write. A failed install rolls the entry back.
 			if err := addonManifest.Save(discovered.ManifestPath); err != nil {
