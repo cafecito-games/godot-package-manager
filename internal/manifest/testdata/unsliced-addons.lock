@@ -1,0 +1,10 @@
+[addons]
+  [addons.dialogue_manager]
+    resolved_version = "v2.44.0"
+    source_path = "addons/dialogue_manager"
+    checksum = "3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b"
+    spec_hash = "7d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e"
+  [addons.gut]
+    resolved_version = "aa0d7a1dd5bcf76f6bbe7abd8a1cfd62d1b1eecb"
+    source_path = "addons/gut"
+    spec_hash = "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809"

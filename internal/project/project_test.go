@@ -21,6 +21,7 @@ func TestDiscoverWalksUp(t *testing.T) {
 	require.Equal(t, root, p.Root)
 	require.Equal(t, filepath.Join(root, "addons.toml"), p.ManifestPath)
 	require.Equal(t, filepath.Join(root, "addons.lock"), p.LockPath)
+	require.Equal(t, filepath.Join(root, ".gpm-state.toml"), p.StatePath)
 	require.Equal(t, filepath.Join(root, "addons"), p.AddonsDir)
 }
 
