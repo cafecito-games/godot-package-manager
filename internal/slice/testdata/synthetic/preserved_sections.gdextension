@@ -1,0 +1,22 @@
+; an author's comment above the configuration
+[configuration]
+
+entry_symbol = "demo_init"
+compatibility_minimum = "4.2"
+reloadable = true
+
+[icons]
+
+# icons are not platform tagged and are never partitioned
+DemoNode = "res://addons/demo/demo_node.svg"
+DemoResource = "res://addons/demo/demo_resource.svg"
+
+[author_invented]
+
+anything = { "nested": [1, 2, 3] }
+
+[libraries]
+
+; desktop
+linux.release.x86_64 = "res://addons/demo/bin/libdemo.linux.so"
+macos.release = "res://addons/demo/bin/libdemo.macos.framework"
