@@ -332,6 +332,13 @@ func TestSelectionModeRoundTripsOnDisk(t *testing.T) {
 		installedSlicesOf(t, projectRoot))
 	require.Equal(t, lockReference, string(lockBytesOf(t, projectRoot)))
 
+	install()
+	require.Equal(t, []string{"core", "ios.arm64", "macos"}, installedSlicesOf(t, projectRoot),
+		"a default install after --all-platforms prunes the slices the project does not declare")
+	require.NotContains(t, installedFiles(t, projectRoot), "bin/addon_windows.dll")
+	require.Equal(t, lockReference, string(lockBytesOf(t, projectRoot)))
+
+	install("--all-platforms")
 	install("--host-only")
 	require.Equal(t, []string{"core", "macos"}, installedSlicesOf(t, projectRoot),
 		"host-only after --all-platforms prunes the disk back down")
