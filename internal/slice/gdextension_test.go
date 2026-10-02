@@ -1664,22 +1664,64 @@ macos.debug = { "res://addons/demo/bin/libz.dylib" : "libs", "res://addons/demo/
 }
 
 // TestExtensionPartitionDropsACommentInsideADependencyDictionary pins the one
-// place a comment is not preserved: the index carries no comment at the depth of
-// a dependency path, so a comment among a Dictionary's items is accepted and
-// dropped. A partitioned section's own comments keep their separate treatment in
-// the core body.
+// place a comment is not preserved, and pins it for both spellings the parser
+// produces: a comment standing among a Dictionary's items, and a comment between
+// an entry's key and its value, which the parser attaches to the entry as an
+// infix comment.
+//
+// Both are accepted and dropped. The index stores a dependency entry as its
+// paths and destinations and carries no comment at that depth, and the enclosing
+// assignment leaves the core body, so there is nowhere for such a comment to be
+// kept and nothing to restore it from on reassembly. This is the decided
+// behavior rather than an oversight: a partitioned section's own comments are
+// what the format actually carries, and they keep their separate treatment in
+// the core body, asserted by
+// TestExtensionPartitionKeepsCommentsInsideAPartitionedSection.
 func TestExtensionPartitionDropsACommentInsideADependencyDictionary(t *testing.T) {
-	const content = `[dependencies]
+	for _, row := range []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "a comment standing among the items",
+			content: `[dependencies]
 
 macos.debug = {
 	# the support library
 	"res://addons/demo/bin/libsupport.dylib" : ""
 }
-`
-	_, removed, err := PartitionExtension([]byte(content), demoAddonRoot)
-	require.NoError(t, err)
-	require.Equal(t, ExtensionDependencyTargets{"res://addons/demo/bin/libsupport.dylib": ""},
-		removed[SliceID{Platform: "macos"}].Dependencies["macos.debug"])
+`,
+		},
+		{
+			name: "a comment between an entry's key and its value",
+			content: `[dependencies]
+
+macos.debug = {
+	"res://addons/demo/bin/libsupport.dylib" :
+		# copied beside the exported binary
+		""
+}
+`,
+		},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			core, removed, err := PartitionExtension([]byte(row.content), demoAddonRoot)
+			require.NoError(t, err)
+			require.Equal(t, ExtensionDependencyTargets{"res://addons/demo/bin/libsupport.dylib": ""},
+				removed[SliceID{Platform: "macos"}].Dependencies["macos.debug"])
+			require.Empty(t, commentsOf(t, core),
+				"the dictionary's own comment is dropped rather than left in the core body")
+
+			// The drop is total and one-way, so the round trip is still stable
+			// from the first emission of the partitioned form onward.
+			reassembled, err := ReassembleExtension(core, removed, allSlices(removed))
+			require.NoError(t, err)
+			secondCore, secondRemoved, err := PartitionExtension(reassembled, demoAddonRoot)
+			require.NoError(t, err)
+			require.Equal(t, string(core), string(secondCore))
+			require.Equal(t, removed, secondRemoved)
+		})
+	}
 }
 
 // TestExtensionReassemblyIsFailClosedOnDependencyTargets asserts the reassembly
