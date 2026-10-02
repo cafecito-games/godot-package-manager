@@ -18,16 +18,23 @@ import (
 const byteOrderMark = "\ufeff"
 
 // ExtensionEntries holds one slice's removed entries for one .gdextension file,
-// grouped by the section they came from.
+// with one field per partitioned section.
 //
 // The section dimension is load-bearing rather than cosmetic. A Godot platform
 // tag such as "ios.template_release.arm64" legitimately appears in both
 // [libraries] and [dependencies] — one names the platform's library, the other
-// the files shipped beside it — so a map with no section dimension would
-// silently drop one of the two. Each section's table is the same
-// map[string]string the index stores, so a partition result is written straight
+// the files shipped beside it — so a shape with no section dimension would
+// silently drop one of the two.
+//
+// It is a struct rather than a section-keyed map because the sections no longer
+// share a value type, and a map would have to widen its leaf to the union of
+// both and make [libraries] lossy. Each field is exactly the element type of the
+// matching IndexSlice table, so a partition result is still written straight
 // into an IndexSlice with no translation layer.
-type ExtensionEntries map[ExtensionSection]map[string]string
+type ExtensionEntries struct {
+	Libraries    ExtensionEntryTable[string]
+	Dependencies ExtensionEntryTable[ExtensionDependencyTargets]
+}
 
 // PartitionExtension splits a .gdextension into the body the core slice ships
 // and the per-slice entries the index publishes. The returned core keeps every
@@ -79,58 +86,99 @@ func PartitionExtension(content []byte, addonRoot string) ([]byte, map[SliceID]E
 	}
 
 	removed := map[SliceID]ExtensionEntries{}
+	// One partitioner per partitioned section, each binding that section's value
+	// reader and the ExtensionEntries field that holds it. The structural work is
+	// shared and lives in partitionSection; only the leaf type differs, and a Go
+	// method cannot be generic, so the binding is a closure per section. They are
+	// keyed by section and run in PartitionedSections order, so a section added
+	// to the vocabulary without a partitioner here is reported rather than
+	// carried silently into the core body.
+	partitioners := map[ExtensionSection]func() error{
+		SectionLibraries: func() error {
+			return partitionSection(file, root, removed, SectionLibraries, extensionLibraryValueOf,
+				func(entries *ExtensionEntries) *ExtensionEntryTable[string] { return &entries.Libraries })
+		},
+		SectionDependencies: func() error {
+			return partitionSection(file, root, removed, SectionDependencies, extensionDependencyTargetsOf,
+				func(entries *ExtensionEntries) *ExtensionEntryTable[ExtensionDependencyTargets] {
+					return &entries.Dependencies
+				})
+		},
+	}
 	for _, section := range PartitionedSections() {
-		block := sectionNamed(file, section)
-		if block == nil {
-			continue
+		partition, declared := partitioners[section]
+		if !declared {
+			return nil, nil, manifestErrorf(
+				"partitioning .gdextension: section [%s] is not partitioned by this gpm", section,
+			)
 		}
-		// Duplicates are tracked per section, because the same key in both sections
-		// is the shape Godot expects rather than a mistake.
-		seen := map[string]struct{}{}
-		kept := make([]ast.Statement, 0, len(block.Statements))
-		for _, statement := range block.Statements {
-			assignment, isAssignment := statement.(*ast.Assignment)
-			if !isAssignment {
-				// A comment inside a partitioned section is content rather than an
-				// entry, so it stays in the core body and no comment is lost.
-				//
-				// Its position relative to the entries cannot also be kept: the
-				// entries are re-emitted sorted by key, which is what makes two
-				// machines installing the same slice set write identical bytes, so
-				// no entry is at its original index any more. The comments of a
-				// partitioned section are therefore kept as one block in their own
-				// original order, and reassembly writes the entries after them —
-				// which is where the comments real .gdextension files carry in these
-				// sections belong, since they are section and group labels such as
-				// "; desktop" or a commented-out entry.
-				kept = append(kept, statement)
-				continue
-			}
-			owner, value, err := partitionedEntry(root, assignment)
-			if err != nil {
-				return nil, nil, manifestErrorf("partitioning .gdextension [%s]: %s", section, err)
-			}
-			if _, duplicate := seen[assignment.Key]; duplicate {
-				return nil, nil, manifestErrorf(
-					"partitioning .gdextension [%s]: key %q is declared more than once",
-					section, assignment.Key,
-				)
-			}
-			seen[assignment.Key] = struct{}{}
-
-			entries, found := removed[owner]
-			if !found {
-				entries = ExtensionEntries{}
-				removed[owner] = entries
-			}
-			if entries[section] == nil {
-				entries[section] = map[string]string{}
-			}
-			entries[section][assignment.Key] = value
+		if err := partition(); err != nil {
+			return nil, nil, err
 		}
-		block.Statements = kept
 	}
 	return []byte(configfile.Format(file)), removed, nil
+}
+
+// partitionSection moves one section's platform-tagged entries out of the
+// document and into removed, leaving the section's comments behind. readValue is
+// the section's own value reader; tableOf names the ExtensionEntries field the
+// values are stored in.
+func partitionSection[Value any](
+	file *ast.File,
+	root string,
+	removed map[SliceID]ExtensionEntries,
+	section ExtensionSection,
+	readValue func(string, *ast.Assignment) (Value, error),
+	tableOf func(*ExtensionEntries) *ExtensionEntryTable[Value],
+) error {
+	block := sectionNamed(file, section)
+	if block == nil {
+		return nil
+	}
+	// Duplicates are tracked per section, because the same key in both sections
+	// is the shape Godot expects rather than a mistake.
+	seen := map[string]struct{}{}
+	kept := make([]ast.Statement, 0, len(block.Statements))
+	for _, statement := range block.Statements {
+		assignment, isAssignment := statement.(*ast.Assignment)
+		if !isAssignment {
+			// A comment inside a partitioned section is content rather than an
+			// entry, so it stays in the core body and no comment is lost.
+			//
+			// Its position relative to the entries cannot also be kept: the
+			// entries are re-emitted sorted by key, which is what makes two
+			// machines installing the same slice set write identical bytes, so
+			// no entry is at its original index any more. The comments of a
+			// partitioned section are therefore kept as one block in their own
+			// original order, and reassembly writes the entries after them —
+			// which is where the comments real .gdextension files carry in these
+			// sections belong, since they are section and group labels such as
+			// "; desktop" or a commented-out entry.
+			kept = append(kept, statement)
+			continue
+		}
+		owner, value, err := partitionedEntry(root, assignment, readValue)
+		if err != nil {
+			return manifestErrorf("partitioning .gdextension [%s]: %s", section, err)
+		}
+		if _, duplicate := seen[assignment.Key]; duplicate {
+			return manifestErrorf(
+				"partitioning .gdextension [%s]: key %q is declared more than once",
+				section, assignment.Key,
+			)
+		}
+		seen[assignment.Key] = struct{}{}
+
+		entries := removed[owner]
+		table := tableOf(&entries)
+		if *table == nil {
+			*table = ExtensionEntryTable[Value]{}
+		}
+		(*table)[assignment.Key] = value
+		removed[owner] = entries
+	}
+	block.Statements = kept
+	return nil
 }
 
 // ReassembleExtension rebuilds an installed .gdextension from the core body and
@@ -200,11 +248,30 @@ func ReassembleExtension(core []byte, entries map[SliceID]ExtensionEntries, sele
 				id,
 			)
 		}
+		// One reassembler per partitioned section, bound and dispatched for the
+		// same reasons as the partitioners: the structural work is shared, only
+		// the leaf type and its rendering differ, and keying them by section
+		// means a section added to the vocabulary without a reassembler here is
+		// reported rather than dropped from the installed file.
+		reassemblers := map[ExtensionSection]func() error{
+			SectionLibraries: func() error {
+				return reassembleSection(file, filled, owners, SectionLibraries, id,
+					sliceEntries.Libraries, libraryExpressionOf)
+			},
+			SectionDependencies: func() error {
+				return reassembleSection(file, filled, owners, SectionDependencies, id,
+					sliceEntries.Dependencies, dependencyTargetsExpressionOf)
+			},
+		}
 		for _, section := range PartitionedSections() {
-			for _, key := range sortedKeys(sliceEntries[section]) {
-				if err := reassembleEntry(file, filled, owners, section, id, key, sliceEntries[section][key]); err != nil {
-					return nil, err
-				}
+			reassemble, declared := reassemblers[section]
+			if !declared {
+				return nil, fetchErrorf(
+					"reassembling .gdextension: section [%s] is not reassembled by this gpm", section,
+				)
+			}
+			if err := reassemble(); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -220,16 +287,37 @@ func ReassembleExtension(core []byte, entries map[SliceID]ExtensionEntries, sele
 	return []byte(configfile.Format(file)), nil
 }
 
+// reassembleSection validates one slice's entries for one section, in ascending
+// key order, and places them in the section they belong to.
+func reassembleSection[Value any](
+	file *ast.File,
+	filled map[ExtensionSection][]*ast.Assignment,
+	owners map[ExtensionSection]map[string]SliceID,
+	section ExtensionSection,
+	id SliceID,
+	table ExtensionEntryTable[Value],
+	expressionOf func(Value) (ast.Expression, error),
+) error {
+	for _, key := range sortedKeys(table) {
+		if err := reassembleEntry(file, filled, owners, section, id, key, table[key], expressionOf); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // reassembleEntry validates one index entry against the slice that declared it
-// and places it in the section it belongs to.
-func reassembleEntry(
+// and places it in the section it belongs to. expressionOf both validates the
+// section's leaf value and renders it as the Variant Godot reads back.
+func reassembleEntry[Value any](
 	file *ast.File,
 	filled map[ExtensionSection][]*ast.Assignment,
 	owners map[ExtensionSection]map[string]SliceID,
 	section ExtensionSection,
 	id SliceID,
 	key string,
-	value string,
+	value Value,
+	expressionOf func(Value) (ast.Expression, error),
 ) error {
 	owner, err := ReduceLibraryKey(key)
 	if err != nil {
@@ -248,7 +336,8 @@ func reassembleEntry(
 			section, key, owner, id,
 		)
 	}
-	if err := validatePartitionedValue(value); err != nil {
+	expression, err := expressionOf(value)
+	if err != nil {
 		return fetchErrorf("reassembling .gdextension [%s] key %q: %s", section, key, err)
 	}
 	if previous, duplicate := owners[section][key]; duplicate {
@@ -264,8 +353,48 @@ func reassembleEntry(
 		)
 	}
 	owners[section][key] = id
-	filled[section] = append(filled[section], &ast.Assignment{Key: key, Value: &ast.StringLiteral{Value: value}})
+	filled[section] = append(filled[section], &ast.Assignment{Key: key, Value: expression})
 	return nil
+}
+
+// libraryExpressionOf validates a [libraries] value and renders it as the plain
+// quoted string Godot expects.
+func libraryExpressionOf(value string) (ast.Expression, error) {
+	if err := validatePartitionedValue(value); err != nil {
+		return nil, err
+	}
+	return &ast.StringLiteral{Value: value}, nil
+}
+
+// dependencyTargetsExpressionOf validates a [dependencies] value and renders it
+// as Godot's Dictionary of dependency paths to export destinations.
+//
+// Emission is always the Dictionary spelling, even for an entry the author wrote
+// as a bare string: the two spellings are Godot-equivalent and converge at the
+// parser boundary, so the index holds exactly one representation and there is no
+// "which spelling was it" flag to carry. That is in contract with emission
+// already being canonical.
+//
+// The entries are appended in ascending dependency-path order, so two machines
+// installing the same slice set emit identical bytes.
+func dependencyTargetsExpressionOf(targets ExtensionDependencyTargets) (ast.Expression, error) {
+	// Re-checked here rather than trusted from the index, because an Index may
+	// also be assembled in memory by a producer.
+	if err := validateDependencyTargets(targets); err != nil {
+		return nil, err
+	}
+	paths := sortedKeys(targets)
+	dictionary := &ast.DictionaryLiteral{Items: make([]ast.DictionaryItem, 0, len(paths))}
+	for _, path := range paths {
+		if err := validatePartitionedValue(path); err != nil {
+			return nil, fmt.Errorf("dependency path %s", err)
+		}
+		dictionary.Items = append(dictionary.Items, &ast.DictionaryEntry{
+			Key:   &ast.StringLiteral{Value: path},
+			Value: &ast.StringLiteral{Value: targets[path]},
+		})
+	}
+	return dictionary, nil
 }
 
 // parseExtensionDocument parses .gdextension bytes with the Godot config parser.
@@ -345,36 +474,36 @@ func validatePartitionedSectionNames(file *ast.File) error {
 }
 
 // partitionedEntry reads one platform-tagged entry: the slice that owns the file
-// it names, and the res:// path it points at.
-func partitionedEntry(root string, assignment *ast.Assignment) (SliceID, string, error) {
+// it names, and the section's own interpretation of its value. readValue both
+// reads the Variant and validates it, because which Variant kinds are legal and
+// which rules the leaf obeys are the section's own properties, while the key's
+// reduction to a slice is shared.
+func partitionedEntry[Value any](
+	root string,
+	assignment *ast.Assignment,
+	readValue func(string, *ast.Assignment) (Value, error),
+) (SliceID, Value, error) {
+	var zero Value
 	owner, err := ReduceLibraryKey(assignment.Key)
 	if err != nil {
 		// Reported by message for the same reason as in reassembleEntry: the inner
 		// error's own type would decide the exit code of whatever wraps this one.
-		return SliceID{}, "", fmt.Errorf("%s", err)
+		return SliceID{}, zero, fmt.Errorf("%s", err)
 	}
-	value, err := extensionValueOf(assignment)
+	value, err := readValue(root, assignment)
 	if err != nil {
-		return SliceID{}, "", fmt.Errorf("key %q: %s", assignment.Key, err)
-	}
-	if err := validatePartitionedValue(value); err != nil {
-		return SliceID{}, "", fmt.Errorf("key %q: %s", assignment.Key, err)
-	}
-	if err := requireWithinAddonRoot(root, value); err != nil {
-		return SliceID{}, "", fmt.Errorf("key %q: %s", assignment.Key, err)
+		return SliceID{}, zero, fmt.Errorf("key %q: %s", assignment.Key, err)
 	}
 	return owner, value, nil
 }
 
-// extensionValueOf reads a partitioned entry's value, which is one plain quoted
-// res:// path.
+// extensionLibraryValueOf reads a [libraries] entry's value, which is one plain
+// quoted res:// path inside the addon.
 //
-// Godot also accepts a dictionary as a [dependencies] value, mapping each
-// dependency to the subdirectory it is copied into on export. gpm's index
-// publishes one path per key, so a dictionary is reported rather than flattened:
-// flattening it would drop the destinations and install a .gdextension that no
-// longer describes what Godot should copy.
-func extensionValueOf(assignment *ast.Assignment) (string, error) {
+// Godot accepts a Dictionary as a [dependencies] value but not as a [libraries]
+// one, and the reader is selected by the section rather than by the Variant's
+// kind, so a Dictionary here is still reported rather than interpreted.
+func extensionLibraryValueOf(root string, assignment *ast.Assignment) (string, error) {
 	literal, isString := assignment.Value.(*ast.StringLiteral)
 	if !isString {
 		return "", fmt.Errorf(
@@ -382,9 +511,129 @@ func extensionValueOf(assignment *ast.Assignment) (string, error) {
 			describeExpressionKind(assignment.Value), resourcePrefix, format.Expression(assignment.Value),
 		)
 	}
-	// A StringName or NodePath literal decodes to the same text as a plain string
-	// but is a different Variant type, so accepting one would change the value
-	// Godot reads back after reassembly.
+	path, err := plainStringOf(literal)
+	if err != nil {
+		return "", err
+	}
+	if err := requireContainedResourcePath(root, path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// extensionDependencyTargetsOf reads a [dependencies] entry's value as Godot's
+// Dictionary of dependency res:// paths to export destinations.
+//
+// Godot accepts two spellings for one such entry and real addons use both: a
+// Dictionary, which is what limboai, loreline, sentry-godot and godot-sqlite
+// ship, and a bare res:// path, which is what terrabrush ships. Rejecting either
+// would make gpm refuse an addon Godot loads. They converge here, at the parser
+// boundary, with a bare string normalized into the single-entry Dictionary with
+// an empty destination that is its Godot equivalent, so the Go type and the
+// index have exactly one representation of a dependency entry.
+func extensionDependencyTargetsOf(root string, assignment *ast.Assignment) (ExtensionDependencyTargets, error) {
+	switch value := assignment.Value.(type) {
+	case *ast.StringLiteral:
+		path, err := plainStringOf(value)
+		if err != nil {
+			return nil, err
+		}
+		if err := requireContainedResourcePath(root, path); err != nil {
+			return nil, err
+		}
+		return ExtensionDependencyTargets{path: ""}, nil
+	case *ast.DictionaryLiteral:
+		return dependencyTargetsOfDictionary(root, value)
+	case *ast.TypedDictionaryLiteral:
+		// Godot's Dictionary[KeyType, ValueType]({...}) spelling. Only a
+		// String-to-String dictionary carries a dependency entry; any other
+		// declared type is a Variant the index cannot represent, so it is
+		// reported by its declared kind rather than read for its items.
+		if !isStringTypeReference(value.KeyType) || !isStringTypeReference(value.ValueType) {
+			return nil, fmt.Errorf(
+				"value is a dictionary of %s to %s, and a [%s] entry maps quoted %s paths to export destinations: %s",
+				describeTypeReference(value.KeyType), describeTypeReference(value.ValueType),
+				SectionDependencies, resourcePrefix, format.Expression(assignment.Value),
+			)
+		}
+		return dependencyTargetsOfDictionary(root, value.Value)
+	default:
+		return nil, fmt.Errorf(
+			"value is a %s, and a [%s] entry is one quoted %s path or a dictionary mapping quoted %s paths to export destinations: %s",
+			describeExpressionKind(assignment.Value), SectionDependencies,
+			resourcePrefix, resourcePrefix, format.Expression(assignment.Value),
+		)
+	}
+}
+
+// dependencyTargetsOfDictionary reads a Dictionary's items as dependency paths
+// and their export destinations.
+//
+// A comment among the items is accepted and dropped: the index carries no
+// comment at this depth, and a partitioned section's own comments keep their
+// separate treatment in the core body. A duplicate dependency path is reported
+// rather than resolved last-wins, because a map assignment would silently drop a
+// destination.
+func dependencyTargetsOfDictionary(root string, dictionary *ast.DictionaryLiteral) (ExtensionDependencyTargets, error) {
+	targets := ExtensionDependencyTargets{}
+	if dictionary != nil {
+		for _, item := range dictionary.Items {
+			entry, isEntry := item.(*ast.DictionaryEntry)
+			if !isEntry {
+				continue
+			}
+			path, err := dependencyDictionaryString(entry.Key, "dependency path")
+			if err != nil {
+				return nil, err
+			}
+			if err := requireContainedResourcePath(root, path); err != nil {
+				return nil, err
+			}
+			destination, err := dependencyDictionaryString(entry.Value, fmt.Sprintf("destination of dependency %q", path))
+			if err != nil {
+				return nil, err
+			}
+			if err := validateExportDestination(destination); err != nil {
+				return nil, err
+			}
+			if _, duplicate := targets[path]; duplicate {
+				return nil, fmt.Errorf("dependency %q is declared more than once", path)
+			}
+			targets[path] = destination
+		}
+	}
+	if len(targets) == 0 {
+		return nil, fmt.Errorf(
+			"the dictionary names no dependency; an entry that ships nothing is omitted rather than declared empty",
+		)
+	}
+	return targets, nil
+}
+
+// dependencyDictionaryString reads one Dictionary key or value as a plain
+// string, naming the position for the diagnostic so an author is told which half
+// of the entry is wrong.
+func dependencyDictionaryString(expression ast.Expression, position string) (string, error) {
+	literal, isString := expression.(*ast.StringLiteral)
+	if !isString {
+		return "", fmt.Errorf(
+			"%s is a %s, and both halves of a dependency entry are quoted strings: %s",
+			position, describeExpressionKind(expression), format.Expression(expression),
+		)
+	}
+	value, err := plainStringOf(literal)
+	if err != nil {
+		return "", fmt.Errorf("%s: %s", position, err)
+	}
+	return value, nil
+}
+
+// plainStringOf decodes a string literal that carries no Variant prefix.
+//
+// A StringName or NodePath literal decodes to the same text as a plain string
+// but is a different Variant type, so accepting one would change the value Godot
+// reads back after reassembly.
+func plainStringOf(literal *ast.StringLiteral) (string, error) {
 	if literal.Prefix != "" {
 		return "", fmt.Errorf(
 			"value %s is a %s rather than a plain string",
@@ -392,6 +641,33 @@ func extensionValueOf(assignment *ast.Assignment) (string, error) {
 		)
 	}
 	return literal.Value, nil
+}
+
+// requireContainedResourcePath applies the two rules every res:// path a
+// partition reads obeys: it is a clean res:// path, and it names a file inside
+// the addon subtree. A dependency path is checked exactly like a library path,
+// because both locate a file the slice archive carries.
+func requireContainedResourcePath(root, path string) error {
+	if err := validatePartitionedValue(path); err != nil {
+		return err
+	}
+	return requireWithinAddonRoot(root, path)
+}
+
+// isStringTypeReference reports whether a declared container type is plain
+// String, which is the only key or value type a dependency entry may declare.
+func isStringTypeReference(reference *ast.TypeRef) bool {
+	return reference != nil && reference.Name == "String" && len(reference.Arguments) == 0
+}
+
+// describeTypeReference names a declared container type for a diagnostic. Only
+// the type's own name is reported, because that is the component the rule is
+// about and the whole offending value is already printed beside it.
+func describeTypeReference(reference *ast.TypeRef) string {
+	if reference == nil || reference.Name == "" {
+		return "an unnamed type"
+	}
+	return reference.Name
 }
 
 // describeExpressionKind names a Variant kind for a diagnostic, so an author is
@@ -487,8 +763,10 @@ func deduplicatedSliceIDs(ids []SliceID) []SliceID {
 }
 
 // sortedKeys returns a table's keys in sorted order, so that validation visits
-// them deterministically and reports the same failure every run.
-func sortedKeys(table map[string]string) []string {
+// them deterministically, reports the same failure every run, and emits the same
+// bytes on two machines. It is generic in the value because it is applied at
+// every level of a partitioned section, down to a dependency entry's own table.
+func sortedKeys[Value any](table map[string]Value) []string {
 	keys := make([]string, 0, len(table))
 	for key := range table {
 		keys = append(keys, key)

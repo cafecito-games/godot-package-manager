@@ -100,6 +100,10 @@ size   = 4821001
   [slices."ios.arm64".libraries."limboai.gdextension"]
   "ios.template_debug"   = "res://addons/limboai/bin/liblimboai.ios.template_debug.xcframework"
   "ios.template_release" = "res://addons/limboai/bin/liblimboai.ios.template_release.xcframework"
+
+  [slices."ios.arm64".dependencies."limboai.gdextension"]
+  "ios.template_debug"   = { "res://addons/limboai/bin/libgodot-cpp.ios.template_debug.a" = "" }
+  "ios.template_release" = { "res://addons/limboai/bin/libgodot-cpp.ios.template_release.a" = "Frameworks" }
 ```
 
 - `format` is validated first. An index whose `format` exceeds the version gpm understands is a
@@ -111,6 +115,12 @@ size   = 4821001
 - The partition applies to any platform-tagged `.gdextension` section, which today means
   `[libraries]` and `[dependencies]`, keyed by the `.gdextension` file's path relative to the addon
   root so multi-extension addons work.
+- A `[libraries]` entry names one `res://` path, while a `[dependencies]` entry is Godot's own
+  Dictionary mapping each dependency's `res://` path to the export subdirectory Godot copies it
+  into, so the index nests one level further there. An empty destination means "copied beside the
+  exported binary". Godot also accepts a bare `res://` string for a dependency entry; it is accepted
+  and normalized into the single-entry dictionary with an empty destination, which is its Godot
+  equivalent, so the index holds exactly one representation.
 - `core` ships each `.gdextension` with its platform-tagged sections emptied and every other section
   (`[configuration]`, `entry_symbol`, `compatibility_minimum`) byte-preserved.
 
