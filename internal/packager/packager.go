@@ -712,7 +712,16 @@ func requireIdentityOutsideAddonSubtree(outputDirectory, addonRoot string) error
 	if err != nil {
 		return installErrorf("reading the addon subtree %s: %s", addonRoot, err)
 	}
-	current := filepath.Clean(outputDirectory)
+	// Resolved before the ascent, not during it. Ascending the path as written
+	// would compare the right directory at the bottom and the wrong ones above
+	// it, so an output directory symlinked straight to a child of the addon root
+	// would pass: its own identity is not the addon root's, and its lexical
+	// parents are wherever the link happens to live.
+	resolved, err := filepath.EvalSymlinks(outputDirectory)
+	if err != nil {
+		return installErrorf("resolving the output directory %s: %s", outputDirectory, err)
+	}
+	current := filepath.Clean(resolved)
 	for {
 		info, err := os.Stat(current)
 		if err == nil && os.SameFile(info, addonInfo) {

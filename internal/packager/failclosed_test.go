@@ -564,3 +564,20 @@ func TestPackageReportsAFailureWritingTheIndexAsAFilesystemFailure(t *testing.T)
 	var installError *output.InstallError
 	require.ErrorAs(t, err, &installError)
 }
+
+func TestPackageRefusesAnOutputDirectorySymlinkedToADescendantOfTheAddonSubtree(t *testing.T) {
+	root := writeAddon(t, validConfig, map[string]string{
+		"addons/addon/plugin.gd":          "extends Node\n",
+		"addons/addon/bin/addon_linux.so": "linux",
+	})
+	outputDirectory := filepath.Join(t.TempDir(), "dist")
+	require.NoError(t, os.Symlink(filepath.Join(root, "addons", "addon", "bin"), outputDirectory))
+
+	_, err := packager.Package(packager.Options{Directory: root, OutputDirectory: outputDirectory})
+	require.Error(t, err)
+	require.Equal(t, output.ExitManifest, output.CodeFor(err))
+	require.Contains(t, err.Error(), "inside the addon subtree")
+	remaining, readErr := os.ReadDir(filepath.Join(root, "addons", "addon", "bin"))
+	require.NoError(t, readErr)
+	require.Len(t, remaining, 1, "release artifacts were written into the addon subtree")
+}
