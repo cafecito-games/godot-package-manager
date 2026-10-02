@@ -174,7 +174,8 @@ addon "b" publishes no slice for this host (darwin/arm64); published slices are 
 ```
 
 The addon's GDScript still installs, and exit code 0 is correct. A pure-GDScript
-addon publishes `core` alone and needs nothing else.
+addon publishes `core` alone, so it reports the same note on every host and
+needs nothing else — in that case the diagnostic carries no action.
 
 ## A Platform's Binaries Are Missing From A Checkout
 

@@ -154,7 +154,9 @@ $ gpm install --verbose
 addon "b" publishes no slice for this host (darwin/arm64); published slices are core, linux
 ```
 
-A pure-GDScript addon publishes `core` alone and is installed without comment.
+A pure-GDScript addon publishes `core` alone, so it reports the same diagnostic
+on every host. The addon installs and the command succeeds; the note is
+informational, and it is only printed with `--verbose`.
 
 ### A Declared Platform Is Validated In Every Mode
 
