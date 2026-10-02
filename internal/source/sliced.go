@@ -160,7 +160,7 @@ func (f *slicedFetcher) mergeSlices(
 	staging string,
 ) error {
 	guard := newMergeExtractGuard(f.maxExtracted)
-	owners := map[string]slice.SliceID{}
+	owners := map[string]extractedPath{}
 	for _, id := range needed {
 		indexSlice := index.Slices[id.String()]
 		if indexSlice == nil {
@@ -183,7 +183,7 @@ func (f *slicedFetcher) mergeSlice(
 	indexSlice *slice.IndexSlice,
 	staging string,
 	guard *extractGuard,
-	owners map[string]slice.SliceID,
+	owners map[string]extractedPath,
 ) error {
 	downloadURL, found := f.resolve(indexSlice.File)
 	if !found {
@@ -212,22 +212,59 @@ func (f *slicedFetcher) mergeSlice(
 			id, indexSlice.Size, info.Size())
 	}
 	return extractArchiveInto(indexSlice.File, archivePath, staging, guard, func(relative string) error {
-		owner, taken := owners[relative]
+		claimed := extractedPath{id: id, spelling: relative}
+		key := mergeClaimKey(relative)
+		owner, taken := owners[key]
 		if !taken {
-			owners[relative] = id
+			owners[key] = claimed
 			return nil
 		}
-		// The two IDs are named in a fixed order rather than extraction order,
-		// so the same pair of slices reports one message however they were
-		// merged.
-		first, second := owner, id
-		if second.String() < first.String() {
-			first, second = second, first
-		}
-		return fetchErrorf(
-			"slices %q and %q both ship %q; one path in the merged tree cannot come from two slices",
-			first, second, relative)
+		return collisionError(owner, claimed)
 	})
+}
+
+// extractedPath records which slice shipped one path in the merged tree, and the
+// spelling it shipped it under, so a collision can name both spellings when they
+// differ.
+type extractedPath struct {
+	id       slice.SliceID
+	spelling string
+}
+
+// mergeClaimKey reduces an extracted path to the identity two archives would
+// collide on.
+//
+// The key is case-folded rather than the archive's exact spelling, because on a
+// case-insensitive filesystem — the default on macOS and Windows — two
+// differently-cased paths are one file, and an exact-spelling key would let the
+// second slice silently truncate what the first wrote. Folding refuses the pair
+// on every host instead of only on the hosts where it destroys data, which is
+// also what keeps one index installing one tree everywhere.
+func mergeClaimKey(relative string) string {
+	return strings.ToLower(relative)
+}
+
+// collisionError reports two claims on one path. The claims are named in slice-ID
+// order rather than extraction order, so the same pair reports one message
+// however the slices were merged.
+func collisionError(owner, claimed extractedPath) error {
+	first, second := owner, claimed
+	if second.id.String() < first.id.String() {
+		first, second = second, first
+	}
+	const remedy = "one path in the merged tree cannot come from two slices"
+	switch {
+	case first.spelling == second.spelling:
+		return fetchErrorf("slices %q and %q both ship %q; %s", first.id, second.id, first.spelling, remedy)
+	case first.id == second.id:
+		return fetchErrorf(
+			"slice %q ships both %q and %q, which are one file on a case-insensitive filesystem; %s",
+			first.id, first.spelling, second.spelling, remedy)
+	default:
+		return fetchErrorf(
+			"slices %q and %q ship %q and %q, which are one file on a case-insensitive filesystem; %s",
+			first.id, second.id, first.spelling, second.spelling, remedy)
+	}
 }
 
 // reassembleExtensions rewrites every partitioned .gdextension in the merged

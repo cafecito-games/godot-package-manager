@@ -509,3 +509,43 @@ func releaseAssetsOf(fixture slicedFixture, baseURL string) []ghAsset {
 	}
 	return assets
 }
+
+// TestSlicedMergeRejectsCaseVariantPathsAcrossSlices pins that collision
+// detection keys on the identity of the destination file rather than on the
+// archive's exact spelling. On a case-insensitive filesystem the two paths here
+// are one file, so an exact-spelling key would let the second slice truncate
+// what the first wrote; refusing the pair on every host is what keeps one index
+// installing one tree everywhere.
+func TestSlicedMergeRejectsCaseVariantPathsAcrossSlices(t *testing.T) {
+	fixture := craftFixture(t, map[string]craftedSlice{
+		"core":      {files: map[string]string{"plugin.cfg": "[plugin]"}},
+		"ios.arm64": {files: map[string]string{"bin/Shared.so": "from ios"}},
+		"macos":     {files: map[string]string{"bin/shared.so": "from macos"}},
+	})
+	server := fixture.serveRelease(t)
+
+	iosFirst := []slice.SliceID{
+		slice.CoreSliceID(),
+		{Platform: "ios", Architecture: "arm64"},
+		{Platform: "macos"},
+	}
+	macosFirst := []slice.SliceID{
+		slice.CoreSliceID(),
+		{Platform: "macos"},
+		{Platform: "ios", Architecture: "arm64"},
+	}
+
+	messages := make([]string, 0, 2)
+	for _, order := range [][]slice.SliceID{iosFirst, macosFirst} {
+		fetcher := &slicedFetcher{resolve: releaseSliceResolver(releaseAssetsOf(fixture, server.URL), nil)}
+		err := fetcher.mergeSlices(context.Background(), fixture.index, order, t.TempDir())
+		require.Error(t, err)
+		var fetchError *output.FetchError
+		require.ErrorAs(t, err, &fetchError)
+		require.Equal(t, output.ExitFetch, output.CodeFor(err))
+		messages = append(messages, err.Error())
+	}
+	require.Equal(t, messages[0], messages[1])
+	require.Contains(t, messages[0], `slices "ios.arm64" and "macos" ship "bin/Shared.so" and "bin/shared.so"`)
+	require.Contains(t, messages[0], "case-insensitive")
+}
