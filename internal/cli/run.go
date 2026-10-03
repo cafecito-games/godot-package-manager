@@ -170,6 +170,11 @@ func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Mani
 		if err != nil {
 			return nil, err
 		}
+		installedFiles, err := installedFileManifest(filepath.Join(r.AddonsDir, spec.InstallName()))
+		if err != nil {
+			return nil, &output.InstallError{Err: fmt.Errorf(
+				"recording installed files for addon %q: %w", spec.Name, err)}
+		}
 		lockEntry := lockEntryFor(spec, fetched)
 		lock.Addons[spec.Name] = lockEntry
 		if err := lock.Save(r.LockPath); err != nil {
@@ -179,7 +184,7 @@ func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Mani
 		// are both durable, so state never claims slices that are not on disk
 		// or that the lock does not pin. The reverse — on disk but unrecorded —
 		// only costs the next run a re-materialization.
-		stateEntry := stateEntryFor(lockEntry, fetched)
+		stateEntry := stateEntryFor(lockEntry, fetched, installedFiles)
 		state.Addons[spec.Name] = stateEntry
 		if err := r.saveState(state); err != nil {
 			return nil, err
@@ -283,6 +288,10 @@ func (r *Runner) satisfiedOnDisk(
 	if !trusted {
 		return AddonResult{}, false
 	}
+	if problem, complete := installedFilesComplete(spec, state, r.AddonsDir); !complete {
+		r.diagnosef("addon %q: %s; re-materializing\n", spec.Name, problem)
+		return AddonResult{}, false
+	}
 	if len(missingSlicesOnDisk(spec, lock, state, needed, r.AddonsDir)) > 0 {
 		return AddonResult{}, false
 	}
@@ -303,8 +312,8 @@ func (r *Runner) satisfiedOnDisk(
 // neededSlices computes the slice IDs spec needs on host from the published set
 // the lock records, under the given selection mode.
 //
-// An unsliced entry needs no slices at all: it publishes none, so its
-// reconciliation is the install directory's existence alone.
+// An unsliced entry needs no slices at all: it publishes none. Its on-disk
+// reconciliation is handled separately by the installed-file manifest.
 func neededSlices(
 	spec manifest.AddonSpec,
 	entry manifest.LockEntry,
@@ -370,7 +379,7 @@ func recordedSlices(
 	state *manifest.State,
 	addonsDir string,
 ) (map[string]struct{}, bool) {
-	info, err := os.Stat(filepath.Join(addonsDir, spec.InstallName()))
+	info, err := os.Lstat(filepath.Join(addonsDir, spec.InstallName()))
 	if err != nil || !info.IsDir() {
 		return nil, false
 	}
@@ -424,17 +433,84 @@ func lockEntryFor(spec manifest.AddonSpec, fetched source.FetchResult) manifest.
 // which is the subset of the published set the selection mode asked for, and
 // the lock pin it came from. The pin is read off the entry being written to the
 // lock rather than recomputed, so the two records cannot disagree.
-func stateEntryFor(entry manifest.LockEntry, fetched source.FetchResult) manifest.StateEntry {
+func stateEntryFor(entry manifest.LockEntry, fetched source.FetchResult, installedFiles []string) manifest.StateEntry {
 	installed := make([]string, 0, len(fetched.InstalledSlices))
 	for _, id := range fetched.InstalledSlices {
 		installed = append(installed, id.String())
 	}
 	sort.Strings(installed)
 	return manifest.StateEntry{
-		ResolvedVersion: fetched.ResolvedVersion,
-		Slices:          installed,
-		Pin:             pinOf(entry),
+		ResolvedVersion:     fetched.ResolvedVersion,
+		Slices:              installed,
+		Pin:                 pinOf(entry),
+		FileManifestVersion: manifest.CurrentFileManifestVersion,
+		Files:               slices.Clone(installedFiles),
 	}
+}
+
+// installedFileManifest returns the relative paths of the regular files under
+// root. The installer rejects source symlinks, so encountering any non-regular
+// leaf here means the installed tree cannot be described by the version 1 file
+// manifest and the run fails without writing a state record.
+func installedFileManifest(root string) ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("installed path %q is not a regular file", path)
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		files = append(files, filepath.ToSlash(relative))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+// installedFilesComplete checks only the file paths recorded by the version 1
+// state schema. It intentionally ignores file contents and additional paths:
+// users commonly edit addons in place while developing them, and those edits
+// must not turn every install into another fetch.
+func installedFilesComplete(
+	spec manifest.AddonSpec,
+	state *manifest.State,
+	addonsDir string,
+) (string, bool) {
+	entry := state.Addons[spec.Name]
+	if entry.FileManifestVersion != manifest.CurrentFileManifestVersion {
+		return "local state has no installed-file manifest", false
+	}
+	root := filepath.Join(addonsDir, spec.InstallName())
+	rootInfo, err := os.Lstat(root)
+	if err != nil || !rootInfo.IsDir() {
+		return "install directory is missing or is not a directory", false
+	}
+	for _, recorded := range entry.Files {
+		relative := filepath.Clean(filepath.FromSlash(recorded))
+		if relative == "." || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+			return fmt.Sprintf("local state contains unsafe installed-file path %q", recorded), false
+		}
+		info, err := os.Lstat(filepath.Join(root, relative))
+		if err != nil || !info.Mode().IsRegular() {
+			return fmt.Sprintf("installed file %q is missing or is not a regular file", recorded), false
+		}
+	}
+	return "", true
 }
 
 // pinOf reduces a lock entry to the digest identifying the content it pins: the

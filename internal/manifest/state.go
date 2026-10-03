@@ -12,10 +12,22 @@ import (
 	"github.com/cafecito-games/godot-package-manager/internal/output"
 )
 
+// CurrentFileManifestVersion records required regular-file paths without
+// hashing contents. See StateEntry.FileManifestVersion for the exact contract.
+const CurrentFileManifestVersion = 1
+
 // StateEntry records what one addon materialized on this machine.
 type StateEntry struct {
 	ResolvedVersion string   `toml:"resolved_version"` // the version these slices came from
 	Slices          []string `toml:"slices"`           // slice IDs present in addons/ on this disk
+
+	// FileManifestVersion selects the on-disk completeness check. Version 1
+	// records the relative paths of installed regular files in Files and checks
+	// that each path still names a regular file. This deliberately does not hash
+	// contents or reject extra paths, so in-place edits and additions are left
+	// alone; it also does not detect removal of an empty directory.
+	FileManifestVersion int      `toml:"file_manifest_version,omitempty"`
+	Files               []string `toml:"files,omitempty"`
 
 	// Pin identifies the lockfile pin these slices were materialized from: a
 	// sliced addon's index_sha256, or an unsliced addon's archive checksum.
@@ -37,9 +49,10 @@ type StateEntry struct {
 //
 // State is never authoritative over the lockfile. It never answers "are these
 // bytes correct" — addons.lock is the only verification authority — it answers
-// only "which slice IDs did this machine materialize". Discarding State can
-// therefore cost extra work but can never produce an unverified install, which
-// is what makes the fail-open in LoadState safe.
+// which slice IDs this machine materialized and whether each recorded file path
+// is still present. Discarding State can therefore cost extra work but can never
+// produce an unverified install, which is what makes the fail-open in LoadState
+// safe.
 type State struct {
 	Addons map[string]StateEntry `toml:"addons"`
 }
@@ -126,13 +139,14 @@ func (state *State) Save(path string) error {
 	return nil
 }
 
-// sorted returns a copy of the state with every slice list sorted, so that the
-// encoded bytes depend only on the set of slices present and not on the order a
-// run happened to materialize them in.
+// sorted returns a copy of the state with every slice and file list sorted, so
+// that the encoded bytes depend only on the sets present and not on traversal or
+// materialization order.
 func (state *State) sorted() *State {
 	normalized := &State{Addons: make(map[string]StateEntry, len(state.Addons))}
 	for name, entry := range state.Addons {
 		entry.Slices = slices.Sorted(slices.Values(entry.Slices))
+		entry.Files = slices.Sorted(slices.Values(entry.Files))
 		normalized.Addons[name] = entry
 	}
 	return normalized

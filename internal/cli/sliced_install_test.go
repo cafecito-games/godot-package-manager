@@ -119,6 +119,28 @@ func TestSlicedInstallIsIdempotentInEverySelectionMode(t *testing.T) {
 	}
 }
 
+// TestSlicedInstallRestoresADeletedFile proves that the installed-file manifest
+// covers the merged output of a sliced addon, not only unsliced archives.
+func TestSlicedInstallRestoresADeletedFile(t *testing.T) {
+	withEnvironment(t, nil)
+	withHost(t, hostA)
+	publisher := servePublisher(t, packSlicedFixture(t, "one"))
+	projectRoot := newSlicedProject(t, publisher, "ios.arm64")
+
+	require.NoError(t, executeGPM(t, io.Discard, io.Discard, "install", "--dir", projectRoot))
+	requests := publisher.requestCount()
+	deleted := filepath.Join(projectRoot, "addons", slicedAddonName, "scripts", "sliced_tool.gd")
+	require.NoError(t, os.Remove(deleted))
+
+	stderr := &bytes.Buffer{}
+	require.NoError(t, executeGPM(t, io.Discard, stderr,
+		"install", "--verbose", "--dir", projectRoot))
+	require.Greater(t, publisher.requestCount(), requests)
+	require.FileExists(t, deleted)
+	require.Contains(t, stderr.String(), `addon "sliced"`)
+	require.Contains(t, stderr.String(), "scripts/sliced_tool.gd")
+}
+
 // selectionModeArguments is the three selection modes as command lines.
 func selectionModeArguments() map[string][]string {
 	return map[string][]string{
