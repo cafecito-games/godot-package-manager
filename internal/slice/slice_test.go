@@ -61,6 +61,7 @@ func TestKnownVocabulariesAreTheDesignsSets(t *testing.T) {
 	require.Equal(t, []string{"android", "ios", "linux", "macos", "web", "windows"}, KnownPlatforms())
 	require.Equal(t, []string{"arm32", "arm64", "rv64", "universal", "wasm32", "x86_32", "x86_64"}, KnownArchitectures())
 	require.Equal(t, []string{"debug", "editor", "release", "template_debug", "template_release"}, KnownBuildTargets())
+	require.Equal(t, []string{"simulator", "threads"}, KnownPlatformVariants())
 }
 
 // parseFailClosedRows covers every fail-closed row of issue #18 that applies to
@@ -166,6 +167,10 @@ func TestReduceLibraryKeyDropsEveryNonArchitectureAxis(t *testing.T) {
 		{"windows.x86_64.double.release", "windows.x86_64"},
 		{"android.arm64.double.debug", "android.arm64"},
 		{"web.wasm32.single.release", "web.wasm32"},
+		// Web addons commonly publish threaded and non-threaded builds together.
+		// The threads variant belongs in the same web slice as its sibling.
+		{"web.debug.threads.wasm32", "web.wasm32"},
+		{"web.release.threads.wasm32", "web.wasm32"},
 		// Precision with no architecture, which is what macOS universal
 		// binaries produce.
 		{"macos.single.debug", "macos"},
