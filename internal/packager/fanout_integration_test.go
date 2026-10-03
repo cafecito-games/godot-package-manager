@@ -489,6 +489,66 @@ func TestPackagerStoresAGenericExtrasEntryOnceForEveryArchitectureSliceOfItsPlat
 		archiveEntries(t, filepath.Join(outputDirectory, "sentry-2.3.0-core.zip")))
 }
 
+func TestPackagerAcceptsAndroidLibrariesProvidedByAnAARPlugin(t *testing.T) {
+	extension := `[configuration]
+
+entry_symbol = "aarkit_main"
+android_aar_plugin = true
+
+[libraries]
+
+android.debug.arm64 = "res://addons/aarkit/bin/android/arm64-v8a/libaarkit.so"
+android.release.arm64 = "res://addons/aarkit/bin/android/arm64-v8a/libaarkit.so"
+android.debug.x86_64 = "res://addons/aarkit/bin/android/x86_64/libaarkit.so"
+android.release.x86_64 = "res://addons/aarkit/bin/android/x86_64/libaarkit.so"
+linux.x86_64 = "res://addons/aarkit/bin/linux_x86_64/libaarkit.so"
+`
+	root := writeAddon(t, `
+[package]
+name       = "aarkit"
+addon_path = "addons/aarkit"
+version    = "1.0.0"
+
+[package.slices]
+android = ["bin/android/aarkit.aar"]
+`, map[string]string{
+		"addons/aarkit/aarkit.gdextension":            extension,
+		"addons/aarkit/plugin.gd":                     "extends Node\n",
+		"addons/aarkit/bin/android/aarkit.aar":        "Android libraries live at jni/<abi>/ inside this archive",
+		"addons/aarkit/bin/linux_x86_64/libaarkit.so": "linux",
+	})
+
+	result, err := packager.Package(packager.Options{Directory: root})
+	require.NoError(t, err)
+	index := loadEmittedIndex(t, result.Index)
+
+	require.Equal(t, []string{"android.arm64", "android.x86_64", "core", "linux.x86_64"}, sliceIDs(index))
+	require.Equal(t, 2, index.Format)
+	require.Equal(t, []string{"android"}, index.Slices["android.arm64"].Artifacts)
+	require.Equal(t, []string{"android"}, index.Slices["android.x86_64"].Artifacts)
+	require.Equal(t,
+		slice.ExtensionEntryTable[string]{
+			"android.debug.arm64":   "res://addons/aarkit/bin/android/arm64-v8a/libaarkit.so",
+			"android.release.arm64": "res://addons/aarkit/bin/android/arm64-v8a/libaarkit.so",
+		},
+		index.Slices["android.arm64"].Libraries["aarkit.gdextension"],
+	)
+	require.Equal(t,
+		slice.ExtensionEntryTable[string]{
+			"android.debug.x86_64":   "res://addons/aarkit/bin/android/x86_64/libaarkit.so",
+			"android.release.x86_64": "res://addons/aarkit/bin/android/x86_64/libaarkit.so",
+		},
+		index.Slices["android.x86_64"].Libraries["aarkit.gdextension"],
+	)
+	require.Equal(t,
+		[]string{"bin/android/aarkit.aar"},
+		archiveEntries(t, filepath.Join(filepath.Dir(result.Index), index.Artifacts["android"].File)),
+	)
+	core := string(archiveContent(t,
+		filepath.Join(filepath.Dir(result.Index), index.Slices["core"].File), "aarkit.gdextension"))
+	require.Contains(t, core, "android_aar_plugin=true")
+}
+
 func TestPackagerKeepsThreadedAndNonThreadedWebLibrariesInOneSlice(t *testing.T) {
 	extension := `[configuration]
 

@@ -443,6 +443,25 @@ names the same file unambiguously and is accepted instead.
 `res://` is the only form published. Whichever form the author wrote, the index
 stores the resolved project-absolute path.
 
+Ordinarily every `[libraries]` value must resolve to a file in the addon tree so
+the slice cannot promise a binary its archive does not carry. Android AAR plugins
+are the narrow exception: when `[configuration] android_aar_plugin = true`, an
+`android.*` library may be absent because Godot resolves it from `jni/<abi>/`
+inside the plugin `.aar` after export. `gpm package` records that entry in the
+Android slice without claiming an on-disk `.so`; the `.aar` itself must be added
+as a generic Android extra, for example:
+
+```toml
+[package.slices]
+android = ["bin/android/*.aar"]
+```
+
+`gpm` does not inspect the `.aar` to prove it contains the named object—that is
+the publisher's responsibility. The normal file and containment checks still
+apply to non-Android libraries, `[dependencies]`, and Android libraries when the
+flag is absent or false. An Android library that does exist in the addon tree is
+still assigned to its Android slice normally.
+
 ### Mixed Architecture Granularity
 
 One platform's entries can legitimately split across the platform's generic
