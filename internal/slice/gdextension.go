@@ -36,6 +36,36 @@ type ExtensionEntries struct {
 	Dependencies ExtensionEntryTable[ExtensionDependencyTargets]
 }
 
+// AndroidAARPluginEnabled reports whether a .gdextension opts into Godot's
+// Android AAR plugin path resolution. With that flag enabled, Android
+// [libraries] paths name objects inside the exported APK rather than files in
+// the addon tree.
+//
+// The last assignment wins, matching Godot ConfigFile lookup when a key or its
+// section is repeated. Only the boolean value true enables the behavior; a
+// value of another Variant type does not weaken packaging validation.
+func AndroidAARPluginEnabled(content []byte) (bool, error) {
+	file, err := parseExtensionDocument(content)
+	if err != nil {
+		return false, err
+	}
+	enabled := false
+	for _, section := range file.Sections {
+		if section == nil || section.Name != "configuration" {
+			continue
+		}
+		for _, statement := range section.Statements {
+			assignment, isAssignment := statement.(*ast.Assignment)
+			if !isAssignment || assignment.Key != "android_aar_plugin" {
+				continue
+			}
+			literal, isBool := assignment.Value.(*ast.BoolLiteral)
+			enabled = isBool && literal.Value
+		}
+	}
+	return enabled, nil
+}
+
 // PartitionExtension splits a .gdextension into the body the core slice ships
 // and the per-slice entries the index publishes. The returned core keeps every
 // section, key, value, and comment of the input except the platform-tagged

@@ -54,6 +54,34 @@ macos.debug = "res://addons/demo/bin/libdemo.macos.framework"
 ios.template_release.arm64 = "res://addons/demo/bin/libsupport.ios.arm64.a"
 `
 
+func TestAndroidAARPluginEnabledRequiresTheBooleanTrue(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{name: "absent", content: "[configuration]\nentry_symbol = \"demo_init\"\n"},
+		{name: "true", content: "[configuration]\nandroid_aar_plugin = true\n", want: true},
+		{name: "false", content: "[configuration]\nandroid_aar_plugin = false\n"},
+		{name: "string true", content: "[configuration]\nandroid_aar_plugin = \"true\"\n"},
+		{
+			name: "later assignment wins",
+			content: "[configuration]\nandroid_aar_plugin = true\n" +
+				"[configuration]\nandroid_aar_plugin = false\n",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			enabled, err := AndroidAARPluginEnabled([]byte(testCase.content))
+			require.NoError(t, err)
+			require.Equal(t, testCase.want, enabled)
+		})
+	}
+
+	_, err := AndroidAARPluginEnabled([]byte("[configuration\n"))
+	require.ErrorContains(t, err, "not a valid Godot configuration file")
+}
+
 func TestExtensionPartitionEmptiesLibrariesAndGroupsEntriesBySlice(t *testing.T) {
 	core, removed, err := PartitionExtension([]byte(minimalExtension), demoAddonRoot, demoExtensionPath)
 	require.NoError(t, err)

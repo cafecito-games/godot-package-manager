@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -127,7 +128,7 @@ func Package(options Options) (*Result, error) {
 	// res:// path in their working project is also the value a consumer resolves.
 	resourceRoot := resourcePrefix + config.Package.AddonPath
 
-	partitioned, coreBodies, err := partitionExtensions(tree, resourceRoot)
+	partitioned, coreBodies, androidAARPlugins, err := partitionExtensions(tree, resourceRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -142,11 +143,15 @@ func Package(options Options) (*Result, error) {
 	}
 
 	claims := newClaimSet()
-	if err := claimEntryFiles(claims, tree, partitioned, plan, resourceRoot); err != nil {
+	aarRequirements, err := claimEntryFiles(claims, tree, partitioned, plan, resourceRoot, androidAARPlugins)
+	if err != nil {
 		return nil, err
 	}
-	extras, err := claimExtras(claims, tree, config.Package.Slices, declared, plan)
+	extras, extraFiles, err := claimExtras(claims, tree, config.Package.Slices, declared, plan)
 	if err != nil {
+		return nil, err
+	}
+	if err := requireAARPayloads(aarRequirements, extraFiles); err != nil {
 		return nil, err
 	}
 	if err := rejectGenericSliceBesideItsArchitectures(published, extras); err != nil {
@@ -267,9 +272,10 @@ func Package(options Options) (*Result, error) {
 func partitionExtensions(
 	tree *addonTree,
 	resourceRoot string,
-) (map[slice.SliceID]map[string]slice.ExtensionEntries, map[string][]byte, error) {
+) (map[slice.SliceID]map[string]slice.ExtensionEntries, map[string][]byte, map[string]bool, error) {
 	partitioned := map[slice.SliceID]map[string]slice.ExtensionEntries{}
 	coreBodies := map[string][]byte{}
+	androidAARPlugins := map[string]bool{}
 	for _, file := range tree.files {
 		if !strings.HasSuffix(file.relativePath, extensionSuffix) {
 			continue
@@ -281,16 +287,23 @@ func partitionExtensions(
 		// the published core body.
 		content, err := readRegularFile(tree.sourceAt(file.relativePath))
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		core, removed, err := slice.PartitionExtension(content, resourceRoot, file.relativePath)
 		if err != nil {
 			// Reported by message rather than wrapped: the inner error is already
 			// an *output.ManifestError, so wrapping would nest one exit-code
 			// carrier inside another.
-			return nil, nil, manifestErrorf("%s: %s", file.relativePath, err)
+			return nil, nil, nil, manifestErrorf("%s: %s", file.relativePath, err)
+		}
+		androidAARPlugin, err := slice.AndroidAARPluginEnabled(core)
+		if err != nil {
+			// PartitionExtension just parsed and formatted this body, so this is an
+			// internal invariant failure rather than a second author-facing shape.
+			return nil, nil, nil, manifestErrorf("%s: reading partitioned configuration: %s", file.relativePath, err)
 		}
 		coreBodies[file.relativePath] = core
+		androidAARPlugins[file.relativePath] = androidAARPlugin
 		for id, entries := range removed {
 			if partitioned[id] == nil {
 				partitioned[id] = map[string]slice.ExtensionEntries{}
@@ -298,7 +311,7 @@ func partitionExtensions(
 			partitioned[id][file.relativePath] = entries
 		}
 	}
-	return partitioned, coreBodies, nil
+	return partitioned, coreBodies, androidAARPlugins, nil
 }
 
 // claimEntryFiles assigns the files each partitioned .gdextension entry names to
@@ -314,15 +327,25 @@ func claimEntryFiles(
 	partitioned map[slice.SliceID]map[string]slice.ExtensionEntries,
 	plan fanOutPlan,
 	resourceRoot string,
-) error {
+	androidAARPlugins map[string]bool,
+) (map[slice.SliceID][]aarRequirement, error) {
+	aarRequirements := map[slice.SliceID][]aarRequirement{}
 	for _, source := range sortedSliceIDs(partitioned) {
 		targets := plan.targetsOf(source)
 		for _, extensionPath := range sortedKeys(partitioned[source]) {
 			entries := partitioned[source][extensionPath]
 			for _, key := range sortedKeys(entries.Libraries) {
 				origin := entryOrigin(slice.SectionLibraries, key, extensionPath)
-				if err := claimEntryValue(claims, tree, resourceRoot, entries.Libraries[key], origin, source, targets); err != nil {
-					return err
+				allowMissing := source.Platform == "android" && androidAARPlugins[extensionPath]
+				missing, err := claimEntryValue(claims, tree, resourceRoot, entries.Libraries[key], origin, source, targets, allowMissing)
+				if err != nil {
+					return nil, err
+				}
+				if missing {
+					requirement := aarRequirement{origin: origin, value: entries.Libraries[key]}
+					for _, target := range targets {
+						aarRequirements[target] = append(aarRequirements[target], requirement)
+					}
 				}
 			}
 			for _, key := range sortedKeys(entries.Dependencies) {
@@ -333,7 +356,7 @@ func claimEntryFiles(
 				// would mean the mapping above lost a dependency rather than that
 				// the author declared nothing.
 				if len(targetTable) == 0 {
-					return manifestErrorf("%s names no dependency", origin)
+					return nil, manifestErrorf("%s names no dependency", origin)
 				}
 				// Every dictionary key is a file the slice must carry, so each one
 				// obeys exactly the rule a [libraries] value obeys. The
@@ -341,14 +364,21 @@ func claimEntryFiles(
 				// than anything in the addon tree, so it is validated and copied
 				// into the index but never stat-ed, archived, or created.
 				for _, dependencyPath := range sortedKeys(targetTable) {
-					if err := claimEntryValue(claims, tree, resourceRoot, dependencyPath, origin, source, targets); err != nil {
-						return err
+					if _, err := claimEntryValue(claims, tree, resourceRoot, dependencyPath, origin, source, targets, false); err != nil {
+						return nil, err
 					}
 				}
 			}
 		}
 	}
-	return nil
+	return aarRequirements, nil
+}
+
+// aarRequirement is one Android [libraries] entry whose file is deliberately
+// absent from the addon tree because Godot resolves it from an AAR at export.
+type aarRequirement struct {
+	origin string
+	value  string
 }
 
 // claimEntryValue claims the files one entry value names for every slice the
@@ -359,17 +389,18 @@ func claimEntryValue(
 	resourceRoot, value, origin string,
 	source slice.SliceID,
 	targets []slice.SliceID,
-) error {
-	files, err := entryFilesOf(tree, resourceRoot, value, origin)
+	allowMissing bool,
+) (bool, error) {
+	files, err := entryFilesOf(tree, resourceRoot, value, origin, allowMissing)
 	if err != nil {
-		return err
+		return false, err
 	}
 	for _, target := range targets {
 		for _, relativePath := range files {
 			claims.add(relativePath, fileClaim{id: target, origin: origin, fannedOut: target != source})
 		}
 	}
-	return nil
+	return allowMissing && len(files) == 0, nil
 }
 
 // entryFilesOf maps one entry value back to the files of the addon subtree it
@@ -386,7 +417,7 @@ func claimEntryValue(
 // A value naming a directory resolves to every file beneath it, because a macOS
 // .framework and an iOS .xcframework are directories a [libraries] entry points
 // straight at.
-func entryFilesOf(tree *addonTree, resourceRoot, value, origin string) ([]string, error) {
+func entryFilesOf(tree *addonTree, resourceRoot, value, origin string, allowMissing bool) ([]string, error) {
 	prefix := resourceRoot + "/"
 	if !strings.HasPrefix(value, prefix) {
 		return nil, manifestErrorf(
@@ -396,6 +427,9 @@ func entryFilesOf(tree *addonTree, resourceRoot, value, origin string) ([]string
 	relativePath := strings.TrimPrefix(value, prefix)
 	files := tree.resolve(relativePath)
 	if len(files) == 0 {
+		if allowMissing {
+			return nil, nil
+		}
 		return nil, manifestErrorf(
 			"%s names %q, which is not a file in the addon subtree; a slice may not promise a binary that is not there",
 			origin, value,
@@ -422,8 +456,9 @@ func claimExtras(
 	extras map[string][]string,
 	declared []slice.SliceID,
 	plan fanOutPlan,
-) (map[slice.SliceID]struct{}, error) {
+) (map[slice.SliceID]struct{}, map[slice.SliceID][]string, error) {
 	claimed := map[slice.SliceID]struct{}{}
+	claimedFiles := map[slice.SliceID][]string{}
 	tags := sortedKeys(extras)
 	for position, tag := range tags {
 		id := declared[position]
@@ -438,17 +473,47 @@ func claimExtras(
 		for _, pattern := range extras[tag] {
 			matched, err := matchExtras(tree, id, pattern)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			origin := fmt.Sprintf("[package.slices] pattern %q", pattern)
 			for _, relativePath := range matched {
 				for _, target := range targets {
 					claims.add(relativePath, fileClaim{id: target, origin: origin, fannedOut: target != id})
+					claimedFiles[target] = append(claimedFiles[target], relativePath)
 				}
 			}
 		}
 	}
-	return claimed, nil
+	return claimed, claimedFiles, nil
+}
+
+// requireAARPayloads proves that every missing Android library accepted under
+// android_aar_plugin is backed by an AAR extra delivered with that target slice.
+// The AAR is intentionally opaque: validating its jni/<abi> contents remains the
+// publisher's responsibility, but forgetting the payload altogether is still a
+// package error gpm can detect.
+func requireAARPayloads(
+	requirements map[slice.SliceID][]aarRequirement,
+	extraFiles map[slice.SliceID][]string,
+) error {
+	for _, id := range sortedSliceIDs(requirements) {
+		found := false
+		for _, relativePath := range extraFiles[id] {
+			if strings.EqualFold(path.Ext(relativePath), ".aar") {
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+		requirement := requirements[id][0]
+		return manifestErrorf(
+			"%s names %q, which is provided by android_aar_plugin, but slice %q has no .aar payload from [package.slices]",
+			requirement.origin, requirement.value, id,
+		)
+	}
+	return nil
 }
 
 // declaredSliceIDs parses the [package.slices] keys into slice IDs, in the same
