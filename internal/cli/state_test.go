@@ -184,6 +184,41 @@ func TestInPlaceFileEditsDoNotInvalidateAnInstall(t *testing.T) {
 	require.FileExists(t, filepath.Join(addonsDir, "dlg", "local.gd"))
 }
 
+func TestSymlinkedAddonDevelopmentCheckoutIsNotReplaced(t *testing.T) {
+	projectRoot := t.TempDir()
+	addonsDir := filepath.Join(projectRoot, "addons")
+	calls := 0
+	addonManifest := &manifest.Manifest{Addons: map[string]manifest.AddonSpec{
+		"dlg": {Name: "dlg", Source: manifest.SourceArchive, URL: "u"},
+	}}
+	runner := &Runner{
+		AddonsDir: addonsDir,
+		LockPath:  filepath.Join(projectRoot, "addons.lock"),
+		StatePath: filepath.Join(projectRoot, project.StateFileName),
+		FetcherFor: func(manifest.AddonSpec) (source.Fetcher, error) {
+			return countingFetcher{version: "1.0", calls: &calls}, nil
+		},
+	}
+	_, err := runner.InstallAddons(context.Background(), addonManifest, nil, ModeInstall)
+	require.NoError(t, err)
+
+	installRoot := filepath.Join(addonsDir, "dlg")
+	developmentRoot := filepath.Join(projectRoot, "dlg-development")
+	require.NoError(t, os.Rename(installRoot, developmentRoot))
+	if err := os.Symlink(developmentRoot, installRoot); err != nil {
+		t.Skipf("creating a directory symlink is not supported: %v", err)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(developmentRoot, "plugin.cfg"), []byte("development edit"), 0o644))
+
+	_, err = runner.InstallAddons(context.Background(), addonManifest, nil, ModeInstall)
+	require.NoError(t, err)
+	require.Equal(t, 1, calls, "a symlinked development checkout must not be replaced")
+	info, err := os.Lstat(installRoot)
+	require.NoError(t, err)
+	require.NotZero(t, info.Mode()&os.ModeSymlink)
+	require.Equal(t, "development edit", string(readFileBytes(t, filepath.Join(installRoot, "plugin.cfg"))))
+}
+
 func TestLegacyStateWithoutAFileManifestReMaterializesOnce(t *testing.T) {
 	projectRoot := t.TempDir()
 	statePath := filepath.Join(projectRoot, project.StateFileName)

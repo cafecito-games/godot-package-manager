@@ -379,7 +379,7 @@ func recordedSlices(
 	state *manifest.State,
 	addonsDir string,
 ) (map[string]struct{}, bool) {
-	info, err := os.Lstat(filepath.Join(addonsDir, spec.InstallName()))
+	info, err := os.Stat(filepath.Join(addonsDir, spec.InstallName()))
 	if err != nil || !info.IsDir() {
 		return nil, false
 	}
@@ -496,7 +496,10 @@ func installedFilesComplete(
 		return "local state has no installed-file manifest", false
 	}
 	root := filepath.Join(addonsDir, spec.InstallName())
-	rootInfo, err := os.Lstat(root)
+	// The install root may intentionally be a symlink to a local development
+	// checkout. Follow that link while retaining Lstat for each recorded leaf,
+	// so a required file replaced by a symlink still counts as damaged.
+	rootInfo, err := os.Stat(root)
 	if err != nil || !rootInfo.IsDir() {
 		return "install directory is missing or is not a directory", false
 	}
