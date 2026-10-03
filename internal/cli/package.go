@@ -57,7 +57,7 @@ func newPackageCommand(opts *Options) *cobra.Command {
 	cmd.Flags().StringVar(&directory, "dir", "",
 		"addon repository directory holding "+packager.ConfigFileName+" (default: current directory)")
 	cmd.Flags().StringVar(&outputDirectory, "out", packager.DefaultOutputDirectory,
-		"directory to write slice archives and "+packager.IndexFileName+" into")
+		"directory to write slice archives, any shared-artifact archives, and "+packager.IndexFileName+" into")
 	cmd.Flags().StringVar(&version, "version", "",
 		"version to package, overriding [package] version")
 	return cmd

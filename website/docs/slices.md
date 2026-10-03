@@ -648,6 +648,18 @@ and every published architecture slice of that platform must list it in its
 `artifacts` array. Artifacts cannot be declared in `addons.toml` or selected on
 their own.
 
+A malformed dependency graph is rejected while the index loads, with exit code
+4. For example:
+
+```text
+gpm: index format 2 declares no [artifacts]; format 2 is used only when slices share an archive
+gpm: index artifact "android" is shared by its platform, but architecture slice "android.x86_64" does not reference it
+```
+
+Artifact dependency lists must also be unique and sorted, must name a published
+artifact, and may appear only on architecture slices of that artifact's
+platform. These are publisher errors; the project cannot repair them locally.
+
 An archive is resolved by joining `file` to the directory the index was
 downloaded from, so the index and its archives are published side by side. Two
 slices or artifacts may not declare the same `file`.
@@ -690,8 +702,8 @@ Every byte of a sliced addon is verified against a pin:
   how the index parses cannot evade it.
 - Each slice and shared-artifact archive is pinned by the `sha256` and `size` the
   index declares and by its matching table in `addons.lock`.
-- The lock's published set is compared as a set, so a retagged release that adds
-  or drops a slice fails rather than installing quietly.
+- The lock's published sets are compared as sets, so a retagged release that
+  adds or drops a slice or shared artifact fails rather than installing quietly.
 
 A mismatch is exit code 4 and installs nothing:
 
@@ -712,13 +724,14 @@ what this disk took.
 A sliced addon has no single archive, so `checksum` in `addons.toml` has nothing
 to pin and is rejected for a sliced addon rather than left to go inert.
 
-Two slices may not ship the same path into the merged tree. The comparison is
+Two archives may not ship the same path into the merged tree. The comparison is
 case-folded, because on a case-insensitive filesystem two differently-cased paths
 are one file:
 
 ```text
 $ gpm install
 gpm: slices "core" and "linux" both ship "shared.txt"; one path in the merged tree cannot come from two slices
+gpm: artifact "android" and slice "android.arm64" both ship "plugin.aar"; one path in the merged tree cannot come from two archives
 ```
 
 That failure is exit code 4.

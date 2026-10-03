@@ -23,6 +23,16 @@ Each entry contains:
 An addon is either sliced or it is not: `checksum` and `slices` are never both
 set, and a `slices` table must record the `core` slice.
 
+Every `artifacts` key must be one generic platform name, such as `android`, and
+the `slices` table must pin at least two architecture slices of that platform.
+A hand-edited or merge-resolved lock that breaks either rule fails at load with
+exit code 3, for example:
+
+```text
+gpm: addon "sentry": invalid artifacts key "android.arm64": must be one generic platform name
+gpm: addon "sentry": artifact "android" has 1 architecture slices; a shared artifact requires at least two
+```
+
 ## Sliced Addons
 
 For an addon published as [platform slices](slices.md), `addons.lock` records
