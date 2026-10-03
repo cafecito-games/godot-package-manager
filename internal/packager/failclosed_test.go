@@ -240,6 +240,23 @@ android.arm64 = "bin/android/arm64-v8a/libaddon.so"
 			wantText: "is not a file in the addon subtree",
 		},
 		{
+			name:   "an aar plugin must ship an aar for an exempted android library",
+			config: validConfig,
+			files: map[string]string{
+				"addons/addon/addon.gdextension": `[configuration]
+
+android_aar_plugin = true
+
+[libraries]
+
+android.arm64 = "bin/android/arm64-v8a/libaddon.so"
+`,
+				"addons/addon/plugin.gd": "extends Node\n",
+			},
+			wantCode: output.ExitManifest,
+			wantText: "has no .aar payload from [package.slices]",
+		},
+		{
 			name:   "an aar plugin does not exempt a missing non-android library",
 			config: validConfig,
 			files: map[string]string{

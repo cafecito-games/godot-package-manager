@@ -457,10 +457,12 @@ android = ["bin/android/*.aar"]
 ```
 
 `gpm` does not inspect the `.aar` to prove it contains the named object—that is
-the publisher's responsibility. The normal file and containment checks still
-apply to non-Android libraries, `[dependencies]`, and Android libraries when the
-flag is absent or false. An Android library that does exist in the addon tree is
-still assigned to its Android slice normally.
+the publisher's responsibility. It does require at least one `.aar` extra to
+reach every Android slice that uses this exception, so omitting the plugin
+payload still fails packaging. The normal file and containment checks apply to
+non-Android libraries, `[dependencies]`, and Android libraries when the flag is
+absent or false. An Android library that does exist in the addon tree is still
+assigned to its Android slice normally.
 
 ### Mixed Architecture Granularity
 
