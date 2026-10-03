@@ -48,16 +48,18 @@ var knownBuildTargets = []string{"debug", "editor", "release", "template_debug",
 var knownPrecisions = []string{"double", "single"}
 
 // knownPlatformVariants is the single declaration of the platform variants a
-// .gdextension library key may carry. Godot spells the iOS simulator as a
-// variant of the ios platform rather than as an architecture, which is why
-// "ios.simulator.release" is a key real addons ship.
+// .gdextension library key may carry. Godot spells the iOS simulator and web
+// thread support as variants rather than architectures, which is why
+// "ios.simulator.release" and "web.debug.threads.wasm32" are keys real addons
+// ship.
 //
 // No variant ever appears in a slice ID. The device and simulator libraries of
 // one platform belong to the same slice: a project targeting iOS needs both —
 // the simulator to run the game on a development Mac, the device slice to
 // export — and splitting them would let a project install one and silently lack
-// the other.
-var knownPlatformVariants = []string{"simulator"}
+// the other. The same applies to threaded and non-threaded web libraries: one
+// web export target may need either, so they belong in the same web slice.
+var knownPlatformVariants = []string{"simulator", "threads"}
 
 // KnownPlatforms returns the known Godot platforms in sorted order.
 func KnownPlatforms() []string { return slices.Clone(knownPlatforms) }

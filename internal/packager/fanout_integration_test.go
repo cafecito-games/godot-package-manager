@@ -477,3 +477,53 @@ func TestPackagerFansAGenericExtrasEntryIntoEveryArchitectureSliceOfItsPlatform(
 	require.Equal(t, []string{"plugin.gd", "sentry.gdextension"},
 		archiveEntries(t, filepath.Join(outputDirectory, "sentry-2.3.0-core.zip")))
 }
+
+func TestPackagerKeepsThreadedAndNonThreadedWebLibrariesInOneSlice(t *testing.T) {
+	extension := `[configuration]
+
+entry_symbol = "sentry_main"
+
+[libraries]
+
+web.debug.wasm32 = "bin/web/libsentry.web.debug.wasm32.nothreads.wasm"
+web.release.wasm32 = "bin/web/libsentry.web.release.wasm32.nothreads.wasm"
+web.debug.threads.wasm32 = "bin/web/libsentry.web.debug.wasm32.wasm"
+web.release.threads.wasm32 = "bin/web/libsentry.web.release.wasm32.wasm"
+`
+	root := writeAddon(t, `
+[package]
+name       = "sentry"
+addon_path = "addons/sentry"
+version    = "2.3.0"
+`, map[string]string{
+		"addons/sentry/sentry.gdextension":                                  extension,
+		"addons/sentry/plugin.gd":                                           "extends Node\n",
+		"addons/sentry/bin/web/libsentry.web.debug.wasm32.nothreads.wasm":   "debug no threads",
+		"addons/sentry/bin/web/libsentry.web.release.wasm32.nothreads.wasm": "release no threads",
+		"addons/sentry/bin/web/libsentry.web.debug.wasm32.wasm":             "debug threads",
+		"addons/sentry/bin/web/libsentry.web.release.wasm32.wasm":           "release threads",
+	})
+
+	result, err := packager.Package(packager.Options{Directory: root})
+	require.NoError(t, err)
+	index := loadEmittedIndex(t, result.Index)
+	require.Equal(t, []string{"core", "web.wasm32"}, sliceIDs(index))
+	require.Equal(t,
+		[]string{
+			"web.debug.threads.wasm32",
+			"web.debug.wasm32",
+			"web.release.threads.wasm32",
+			"web.release.wasm32",
+		},
+		entryKeys(index.Slices["web.wasm32"].Libraries["sentry.gdextension"]),
+	)
+	require.Equal(t,
+		[]string{
+			"bin/web/libsentry.web.debug.wasm32.nothreads.wasm",
+			"bin/web/libsentry.web.debug.wasm32.wasm",
+			"bin/web/libsentry.web.release.wasm32.nothreads.wasm",
+			"bin/web/libsentry.web.release.wasm32.wasm",
+		},
+		archiveEntries(t, filepath.Join(filepath.Dir(result.Index), "sentry-2.3.0-web.wasm32.zip")),
+	)
+}

@@ -87,14 +87,15 @@ platform and the architecture, a key may name:
 | --- | --- | --- |
 | Build target | `debug`, `editor`, `release`, `template_debug`, `template_release` | `macos.template_release` |
 | Float precision | `single`, `double` | `windows.x86_64.double.release` |
-| Platform variant | `simulator` | `ios.simulator.release` |
+| Platform variant | `simulator`, `threads` | `ios.simulator.release`, `web.debug.threads.wasm32` |
 
 A slice carries *every* value of each of those axes for its platform, so when
 `gpm` reduces a library key to the slice that owns it, all three are dropped and
 only the architecture survives. `macos.debug` and `macos.template_release` both
 belong to `macos`; `windows.x86_64.single.debug` and
 `windows.x86_64.double.release` both belong to `windows.x86_64`; and
-`ios.release` and `ios.simulator.release` both belong to `ios`.
+`ios.release` and `ios.simulator.release` both belong to `ios`; similarly,
+`web.debug.wasm32` and `web.debug.threads.wasm32` both belong to `web.wasm32`.
 
 The iOS simulator is the one worth spelling out. Godot writes it as a variant of
 the `ios` platform rather than as an architecture, and the device and simulator
@@ -105,6 +106,10 @@ the other.
 
 Float precision appears in every library key of an addon built with godot-cpp's
 SCons setup, which emits `<platform>.<architecture>.<precision>.<build target>`.
+
+Web thread support is also a platform variant. Threaded and non-threaded web
+libraries stay together because a project targeting `web.wasm32` may need
+either build, and both entries belong in that one slice.
 
 A component that belongs to none of those axes is rejected rather than dropped,
 because silently ignoring it would file the binary under the wrong slice and
