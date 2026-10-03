@@ -246,6 +246,37 @@ func TestVerifyChecksumComparesEveryPublishedSlicePin(t *testing.T) {
 	})
 }
 
+func TestFormat2ArtifactsFlowThroughLockStateAndVerification(t *testing.T) {
+	spec := manifest.AddonSpec{Name: "sliced", Source: manifest.SourceArchive, URL: "u"}
+	android32 := slice.SliceID{Platform: "android", Architecture: "arm32"}
+	android64 := slice.SliceID{Platform: "android", Architecture: "arm64"}
+	fetched := source.FetchResult{
+		ResolvedVersion: "1.2.3",
+		IndexChecksum:   checksumOf('a'),
+		PublishedSlices: []source.SliceResult{
+			{ID: slice.CoreSliceID(), Checksum: checksumOf('b')},
+			{ID: android32, Checksum: checksumOf('c')},
+			{ID: android64, Checksum: checksumOf('d')},
+		},
+		PublishedArtifacts: []source.ArtifactResult{{ID: "android", Checksum: checksumOf('e'), Size: 42}},
+		InstalledSlices:    []slice.SliceID{slice.CoreSliceID(), android64},
+		InstalledArtifacts: []string{"android"},
+	}
+
+	entry := lockEntryFor(spec, fetched)
+	require.Equal(t, map[string]string{"android": checksumOf('e')}, entry.Artifacts)
+	require.Equal(t, []string{"android"}, artifactClosure(entry, []slice.SliceID{android64}))
+
+	state := stateEntryFor(entry, fetched, []string{"plugin.cfg"})
+	require.Equal(t, []string{"android"}, state.Artifacts)
+	require.NoError(t, verifyChecksum(spec, &manifest.Lockfile{Addons: map[string]manifest.LockEntry{"sliced": entry}}, fetched, true))
+
+	changed := fetched
+	changed.PublishedArtifacts = []source.ArtifactResult{{ID: "android", Checksum: checksumOf('9'), Size: 42}}
+	err := verifyChecksum(spec, &manifest.Lockfile{Addons: map[string]manifest.LockEntry{"sliced": entry}}, changed, true)
+	require.ErrorContains(t, err, `artifact "android" checksum mismatch`)
+}
+
 // TestVerifyChecksumRejectsSlicedAgainstUnslicedPins covers the exclusivity the
 // lockfile already validates: an addon is either sliced or it is not, and a pin
 // of one kind must never be silently satisfied by a fetch of the other.

@@ -25,6 +25,8 @@ type addonListing struct {
 	// It is never read from the lock's slices table, which records the set the
 	// addon publishes rather than the set that is on this disk.
 	Slices []string `json:"slices,omitempty"`
+	// Artifacts is the format-2 shared dependency closure on this machine.
+	Artifacts []string `json:"artifacts,omitempty"`
 }
 
 // newListCommand builds `gpm list`.
@@ -74,6 +76,7 @@ func newListCommand(opts *Options) *cobra.Command {
 					Version:   spec.Version,
 					Installed: installed,
 					Slices:    slices.Clone(state.Addons[name].Slices),
+					Artifacts: slices.Clone(state.Addons[name].Artifacts),
 				})
 			}
 			return output.Render(cmd.OutOrStdout(), opts.JSON, listings, func() {
@@ -88,6 +91,9 @@ func newListCommand(opts *Options) *cobra.Command {
 					line := fmt.Sprintf("[%s] %-20s %-16s %s", mark, listing.Name, listing.Source, listing.Version)
 					if len(listing.Slices) > 0 {
 						line += "  " + strings.Join(listing.Slices, " ")
+					}
+					if len(listing.Artifacts) > 0 {
+						line += "  shared:" + strings.Join(listing.Artifacts, ",")
 					}
 					_, _ = fmt.Fprintln(cmd.OutOrStdout(), line)
 				}

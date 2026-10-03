@@ -122,7 +122,7 @@ func TestPackagerFanOutKeepsEveryPublishedSliceIndependentlyComplete(t *testing.
 	require.Contains(t, string(macosUniversal), "macos.template_release.universal")
 }
 
-func TestPackagerFanOutCarriesAGenericEntrysFilesIntoEveryArchitectureArchive(t *testing.T) {
+func TestPackagerFanOutStoresAGenericEntrysFilesInOneSharedArtifact(t *testing.T) {
 	extension := `[configuration]
 
 entry_symbol = "addon_main"
@@ -152,18 +152,21 @@ version    = "1.0.0"
 	require.Equal(t, []string{"core", "macos.arm64", "macos.universal"}, sliceIDs(index))
 
 	outputDirectory := filepath.Dir(result.Index)
-	// The generic entry's binary is in both architecture archives. The
-	// duplicate-claim check exempts exactly this, and the duplication is the
-	// price of each slice being installable on its own.
-	require.Equal(t, []string{"bin/addon_macos.dylib", "bin/addon_macos_arm64.dylib"},
+	// The generic entry's binary is stored once in the shared artifact. Each
+	// architecture archive carries only its own bytes and references the same
+	// automatic dependency.
+	require.Equal(t, []string{"bin/addon_macos_arm64.dylib"},
 		archiveEntries(t, filepath.Join(outputDirectory, "addon-1.0.0-macos.arm64.zip")))
-	require.Equal(t, []string{"bin/addon_macos.dylib", "bin/addon_macos_universal.dylib"},
+	require.Equal(t, []string{"bin/addon_macos_universal.dylib"},
 		archiveEntries(t, filepath.Join(outputDirectory, "addon-1.0.0-macos.universal.zip")))
+	require.Equal(t, []string{"bin/addon_macos.dylib"},
+		archiveEntries(t, filepath.Join(outputDirectory, "addon-1.0.0-shared-macos.zip")))
 	require.Equal(t, []string{"addon.gdextension", "plugin.gd"},
 		archiveEntries(t, filepath.Join(outputDirectory, "addon-1.0.0-core.zip")))
 
 	for _, key := range []string{"macos.arm64", "macos.universal"} {
 		require.Contains(t, entryKeys(index.Slices[key].Libraries["addon.gdextension"]), "macos.editor")
+		require.Equal(t, []string{"macos"}, index.Slices[key].Artifacts)
 	}
 }
 
@@ -370,8 +373,10 @@ version    = "1.0.0"
 		require.Contains(t, keys, "macos.editor", "slice %s loses the platform's generic entries", key)
 		require.Contains(t, keys, "macos.template_release", "slice %s loses the platform's generic entries", key)
 	}
-	require.Equal(t, []string{"bin/addon_macos.dylib", "macos/arm64/extra.dylib"},
+	require.Equal(t, []string{"macos/arm64/extra.dylib"},
 		archiveEntries(t, filepath.Join(filepath.Dir(result.Index), "addon-1.0.0-macos.arm64.zip")))
+	require.Equal(t, []string{"bin/addon_macos.dylib"},
+		archiveEntries(t, filepath.Join(filepath.Dir(result.Index), "addon-1.0.0-shared-macos.zip")))
 }
 
 func TestPackagerStillRefusesAGenericPlatformBesideAnExtrasOnlyArchitecture(t *testing.T) {
@@ -445,7 +450,7 @@ version    = "2.3.0"
 	})
 }
 
-func TestPackagerFansAGenericExtrasEntryIntoEveryArchitectureSliceOfItsPlatform(t *testing.T) {
+func TestPackagerStoresAGenericExtrasEntryOnceForEveryArchitectureSliceOfItsPlatform(t *testing.T) {
 	root := writeSentryAddon(t, `
 [package.slices]
 "android" = ["bin/android/*.aar"]
@@ -455,9 +460,13 @@ func TestPackagerFansAGenericExtrasEntryIntoEveryArchitectureSliceOfItsPlatform(
 	require.NoError(t, err)
 	index := loadEmittedIndex(t, result.Index)
 
-	// No generic android slice is published: a host picks the first slice of its
-	// platform it finds, so publishing one beside the ABI slices would hide it.
+	// No generic android slice is published: its payload is a non-selectable
+	// shared artifact that both ABI slices depend on automatically.
 	require.Equal(t, []string{"android.arm32", "android.arm64", "core"}, sliceIDs(index))
+	require.Equal(t, 2, index.Format)
+	require.Equal(t, []string{"android"}, index.Slices["android.arm32"].Artifacts)
+	require.Equal(t, []string{"android"}, index.Slices["android.arm64"].Artifacts)
+	require.Contains(t, index.Artifacts, "android")
 
 	outputDirectory := filepath.Dir(result.Index)
 	for _, architecture := range []string{"arm32", "arm64"} {
@@ -465,13 +474,15 @@ func TestPackagerFansAGenericExtrasEntryIntoEveryArchitectureSliceOfItsPlatform(
 			[]string{
 				"bin/android/libsentry.android.debug." + architecture + ".so",
 				"bin/android/libsentry.android.release." + architecture + ".so",
-				"bin/android/sentry_godot_plugin.debug.aar",
-				"bin/android/sentry_godot_plugin.release.aar",
 			},
 			archiveEntries(t, filepath.Join(outputDirectory, "sentry-2.3.0-android."+architecture+".zip")),
 			"architecture %s does not carry the platform's generic extras", architecture,
 		)
 	}
+	require.Equal(t,
+		[]string{"bin/android/sentry_godot_plugin.debug.aar", "bin/android/sentry_godot_plugin.release.aar"},
+		archiveEntries(t, filepath.Join(outputDirectory, index.Artifacts["android"].File)),
+	)
 	// The .aar files are the whole point of the extras entry, so they must not
 	// also fall into core, which every consumer downloads on every platform.
 	require.Equal(t, []string{"plugin.gd", "sentry.gdextension"},

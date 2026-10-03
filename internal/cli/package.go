@@ -23,7 +23,7 @@ func newPackageCommand(opts *Options) *cobra.Command {
 		Use:   "package",
 		Short: "Partition this addon into platform slice archives and an index",
 		Long: "Read " + packager.ConfigFileName + " from an addon repository, partition the addon subtree " +
-			"into a core slice plus one slice per platform, and write one archive per slice plus " +
+			"into a core slice plus one slice per platform, shared dependency artifacts when needed, and " +
 			packager.IndexFileName + ". Publishing the artifacts remains the author's job.",
 		Args: usageNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -46,6 +46,9 @@ func newPackageCommand(opts *Options) *cobra.Command {
 					result.Name, result.Version, len(result.Slices))
 				for _, published := range result.Slices {
 					_, _ = fmt.Fprintf(writer, "  %-16s %s  %d bytes\n", published.ID, published.File, published.Size)
+				}
+				for _, published := range result.Artifacts {
+					_, _ = fmt.Fprintf(writer, "  shared:%-9s %s  %d bytes\n", published.ID, published.File, published.Size)
 				}
 				_, _ = fmt.Fprintf(writer, "Index: %s\n", result.Index)
 			})

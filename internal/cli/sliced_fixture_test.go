@@ -115,6 +115,49 @@ version = %q
 		require.NoError(t, err)
 		fixture.assets[published.File] = body
 	}
+	for _, published := range result.Artifacts {
+		body, err := os.ReadFile(filepath.Join(filepath.Dir(result.Index), published.File))
+		require.NoError(t, err)
+		fixture.assets[published.File] = body
+	}
+	return fixture
+}
+
+func packSharedArtifactFixture(t *testing.T) slicedFixture {
+	t.Helper()
+	root := t.TempDir()
+	config := fmt.Sprintf(`[package]
+name = %q
+addon_path = %q
+version = %q
+
+[package.slices]
+android = ["bin/android/plugin.aar"]
+`, slicedAddonName, slice.AddonInstallPath(slicedAddonName), slicedVersion)
+	require.NoError(t, os.WriteFile(filepath.Join(root, packager.ConfigFileName), []byte(config), 0o644))
+	addonRoot := filepath.Join(root, filepath.FromSlash(slice.AddonInstallPath(slicedAddonName)))
+	writeTestFile(t, addonRoot, slicedExtensionPath, `[configuration]
+
+[libraries]
+android.release.arm32 = "bin/android/addon.arm32.so"
+android.release.arm64 = "bin/android/addon.arm64.so"
+`)
+	writeTestFile(t, addonRoot, "plugin.cfg", "[plugin]\nname=\"sliced\"\n")
+	writeTestFile(t, addonRoot, "bin/android/addon.arm32.so", "arm32")
+	writeTestFile(t, addonRoot, "bin/android/addon.arm64.so", "arm64")
+	writeTestFile(t, addonRoot, "bin/android/plugin.aar", "shared android plugin")
+
+	result, err := packager.Package(packager.Options{Directory: root})
+	require.NoError(t, err)
+	indexBytes, err := os.ReadFile(result.Index)
+	require.NoError(t, err)
+	fixture := slicedFixture{indexBytes: indexBytes, assets: map[string][]byte{}}
+	for _, published := range result.Slices {
+		fixture.assets[published.File] = readFileBytes(t, filepath.Join(filepath.Dir(result.Index), published.File))
+	}
+	for _, published := range result.Artifacts {
+		fixture.assets[published.File] = readFileBytes(t, filepath.Join(filepath.Dir(result.Index), published.File))
+	}
 	return fixture
 }
 

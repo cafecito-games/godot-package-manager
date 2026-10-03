@@ -17,6 +17,7 @@ Each entry contains:
 | `checksum` | SHA-256 for archive and GitHub release downloads. |
 | `spec_hash` | Hash of the manifest fields that affect resolution. |
 | `slices` | Every slice ID the addon's index publishes, mapped to that slice archive's SHA-256. Set only for a sliced addon. |
+| `artifacts` | Every format-2 shared artifact, mapped to that artifact archive's SHA-256. |
 | `index_sha256` | SHA-256 of the raw `gpm-index.toml` bytes the `slices` table was read from. Set exactly when `slices` is set. |
 
 An addon is either sliced or it is not: `checksum` and `slices` are never both
@@ -49,9 +50,19 @@ project under `--all-platforms` or `--host-only`: the lock is byte-identical in
 all three selection modes. Which slices a particular machine actually
 materialized is a separate question, answered by `.gpm-state.toml`.
 
+For a format-2 index, `artifacts` pins the complete published shared-artifact set
+on every machine. An artifact ID is its generic platform name, so a selected
+architecture slice of that platform pulls it in automatically. The selected
+closure on one disk remains a `.gpm-state.toml` concern.
+
+```toml
+[addons.sentry.artifacts]
+  android = "8ffda2f9a5237ddc7551d0d34db55cf01b79260ad9943166a54d829f57100f7b"
+```
+
 `index_sha256` pins the index document itself, so a retagged release cannot
 silently repoint the slice archives. On a locked install the fetched index digest,
-the published slice set, and every slice checksum are all compared against the
+the published slice and artifact sets, and every archive checksum are all compared against the
 lock, whatever the selection mode.
 
 `addons.lock` is the only verification authority. `.gpm-state.toml` records what

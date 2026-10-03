@@ -46,7 +46,7 @@ type craftedSlice struct {
 func craftFixture(t *testing.T, crafted map[string]craftedSlice) slicedFixture {
 	t.Helper()
 	index := &slice.Index{
-		Format:  slice.SupportedIndexFormat,
+		Format:  1,
 		Name:    fixtureAddonName,
 		Version: fixtureVersion,
 		Slices:  map[string]*slice.IndexSlice{},
@@ -258,7 +258,7 @@ func TestSlicedMergeRejectsCollidingPathsInEitherOrder(t *testing.T) {
 	for _, order := range [][]slice.SliceID{forward, reversed} {
 		staging := t.TempDir()
 		fetcher := &slicedFetcher{resolve: releaseSliceResolver(releaseAssetsOf(fixture, server.URL), nil)}
-		err := fetcher.mergeSlices(context.Background(), fixture.index, order, staging)
+		err := fetcher.mergeSlices(context.Background(), fixture.index, order, nil, staging)
 		require.Error(t, err)
 		var fetchError *output.FetchError
 		require.ErrorAs(t, err, &fetchError)
@@ -538,7 +538,7 @@ func TestSlicedMergeRejectsCaseVariantPathsAcrossSlices(t *testing.T) {
 	messages := make([]string, 0, 2)
 	for _, order := range [][]slice.SliceID{iosFirst, macosFirst} {
 		fetcher := &slicedFetcher{resolve: releaseSliceResolver(releaseAssetsOf(fixture, server.URL), nil)}
-		err := fetcher.mergeSlices(context.Background(), fixture.index, order, t.TempDir())
+		err := fetcher.mergeSlices(context.Background(), fixture.index, order, nil, t.TempDir())
 		require.Error(t, err)
 		var fetchError *output.FetchError
 		require.ErrorAs(t, err, &fetchError)
@@ -621,7 +621,7 @@ func TestSlicedFetchRejectsTwoArchitectureSlicesDisagreeingAboutASharedPath(t *t
 		{Platform: "macos", Architecture: "universal"},
 	}
 	fetcher := &slicedFetcher{resolve: releaseSliceResolver(releaseAssetsOf(fixture, server.URL), nil)}
-	err := fetcher.mergeSlices(context.Background(), fixture.index, selected, t.TempDir())
+	err := fetcher.mergeSlices(context.Background(), fixture.index, selected, nil, t.TempDir())
 
 	var fetchError *output.FetchError
 	require.ErrorAs(t, err, &fetchError)
@@ -648,7 +648,7 @@ func TestSlicedFetchRejectsUnrelatedSlicesSharingAnIdenticalPath(t *testing.T) {
 		{Platform: "macos", Architecture: "arm64"},
 	}
 	fetcher := &slicedFetcher{resolve: releaseSliceResolver(releaseAssetsOf(fixture, server.URL), nil)}
-	err := fetcher.mergeSlices(context.Background(), fixture.index, selected, t.TempDir())
+	err := fetcher.mergeSlices(context.Background(), fixture.index, selected, nil, t.TempDir())
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "cannot come from two slices")

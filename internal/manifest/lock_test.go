@@ -79,6 +79,20 @@ func TestLockRoundTripSlicedEntry(t *testing.T) {
 	require.Equal(t, lockfile.Addons, got.Addons)
 }
 
+func TestLockRoundTripFormat2SharedArtifacts(t *testing.T) {
+	entry := slicedEntry()
+	entry.Slices["android.arm32"] = iosDigest
+	entry.Slices["android.arm64"] = windowsDigest
+	entry.Artifacts = map[string]string{"android": archiveDigest}
+	lockfile := &Lockfile{Addons: map[string]LockEntry{"sentry": entry}}
+	path := filepath.Join(t.TempDir(), "addons.lock")
+	require.NoError(t, lockfile.Save(path))
+
+	got, err := LoadLock(path)
+	require.NoError(t, err)
+	require.Equal(t, lockfile.Addons, got.Addons)
+}
+
 func TestLockRoundTripUnslicedEntryOmitsSliceKeys(t *testing.T) {
 	lockfile := &Lockfile{Addons: map[string]LockEntry{"dialogue_manager": {
 		ResolvedVersion: "v2.44.0",

@@ -414,7 +414,7 @@ func TestExtensionEntriesAreAssignableToAnIndexSlice(t *testing.T) {
 
 	const extensionPath = "demo.gdextension"
 	index := &Index{
-		Format:  SupportedIndexFormat,
+		Format:  1,
 		Name:    "demo",
 		Version: "1.0.0",
 		Slices: map[string]*IndexSlice{
@@ -1831,7 +1831,7 @@ func TestExtensionDictionaryDependenciesSurviveTheWholeIndexPath(t *testing.T) {
 	require.NoError(t, err)
 
 	index := &Index{
-		Format:  SupportedIndexFormat,
+		Format:  1,
 		Name:    "limboai",
 		Version: "1.4.0",
 		Slices: map[string]*IndexSlice{

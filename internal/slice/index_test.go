@@ -17,6 +17,7 @@ import (
 
 const coreSliceDigest = "2bbed7f0a0218278217edd81a4a4d10f91362aa0c46f80f5931423947004e853"
 const platformSliceDigest = "fe7ee35a4e429b6f0e0e07931a046f52b91e1530689ed6ad46fa83239d166711"
+const sharedArtifactDigest = "a17ee35a4e429b6f0e0e07931a046f52b91e1530689ed6ad46fa83239d166712"
 
 // validIndexTOML is the minimal well-formed index the rejection table mutates.
 const validIndexTOML = `format = 1
@@ -32,6 +33,33 @@ size = 182344
 file = "limboai-1.4.0-ios.arm64.zip"
 sha256 = "` + platformSliceDigest + `"
 size = 4821001
+`
+
+const validFormat2IndexTOML = `format = 2
+name = "limboai"
+version = "1.4.0"
+
+[artifacts.android]
+file = "limboai-1.4.0-shared-android.zip"
+sha256 = "` + sharedArtifactDigest + `"
+size = 90210
+
+[slices.core]
+file = "limboai-1.4.0-core.zip"
+sha256 = "` + coreSliceDigest + `"
+size = 182344
+
+[slices."android.arm64"]
+file = "limboai-1.4.0-android.arm64.zip"
+sha256 = "` + platformSliceDigest + `"
+size = 4821001
+artifacts = ["android"]
+
+[slices."android.arm32"]
+file = "limboai-1.4.0-android.arm32.zip"
+sha256 = "` + coreSliceDigest + `"
+size = 3821001
+artifacts = ["android"]
 `
 
 // renderSectionEntry renders one partitioned entry in the section's own schema:
@@ -100,6 +128,88 @@ func TestIndexLoadAcceptsCheckedInFixture(t *testing.T) {
 	)
 }
 
+func TestIndexLoadAcceptsFormat2SharedArtifactDependencies(t *testing.T) {
+	index, err := LoadIndex([]byte(validFormat2IndexTOML))
+	require.NoError(t, err)
+	require.Equal(t, 2, index.Format)
+	require.Equal(t, &IndexArtifact{
+		File: "limboai-1.4.0-shared-android.zip", SHA256: sharedArtifactDigest, Size: 90210,
+	}, index.Artifacts["android"])
+	require.Equal(t, []string{"android"}, index.Slices["android.arm64"].Artifacts)
+	require.Equal(t, []string{"android"}, index.RequiredArtifacts([]SliceID{{Platform: "android", Architecture: "arm64"}}))
+}
+
+func TestIndexFormat1RejectsFormat2ArtifactKeys(t *testing.T) {
+	document := strings.Replace(validFormat2IndexTOML, "format = 2", "format = 1", 1)
+	index, err := LoadIndex([]byte(document))
+	require.Nil(t, index)
+	requireFetchError(t, err)
+	require.Contains(t, err.Error(), "artifacts")
+	require.Contains(t, err.Error(), "format 1")
+}
+
+func TestIndexRejectsInvalidFormat2ArtifactGraphs(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		document string
+		contains string
+	}{
+		{
+			name:     "format 2 without artifacts",
+			document: strings.Replace(validIndexTOML, "format = 1", "format = 2", 1),
+			contains: "declares no [artifacts]",
+		},
+		{
+			name:     "format 1 slice dependency",
+			document: strings.Replace(validIndexTOML, "size = 4821001", "size = 4821001\nartifacts = [\"android\"]", 1),
+			contains: "format 1",
+		},
+		{
+			name:     "missing artifact",
+			document: strings.ReplaceAll(validFormat2IndexTOML, `artifacts = ["android"]`, `artifacts = ["ios"]`),
+			contains: "does not publish",
+		},
+		{
+			name:     "generic slice dependency",
+			document: strings.Replace(validFormat2IndexTOML, `[slices."android.arm64"]`, `[slices.android]`, 1),
+			contains: "only architecture slices",
+		},
+		{
+			name:     "artifact referenced once",
+			document: strings.Replace(validFormat2IndexTOML, "size = 3821001\nartifacts = [\"android\"]", "size = 3821001", 1),
+			contains: "referenced by 1 slices",
+		},
+		{
+			name: "one architecture omits its platform artifact",
+			document: validFormat2IndexTOML + `
+
+[slices."android.x86_64"]
+file = "limboai-1.4.0-android.x86_64.zip"
+sha256 = "` + coreSliceDigest + `"
+size = 2821001
+`,
+			contains: "does not reference",
+		},
+		{
+			name:     "artifact and slice reuse archive name",
+			document: strings.Replace(validFormat2IndexTOML, "limboai-1.4.0-shared-android.zip", "limboai-1.4.0-core.zip", 1),
+			contains: "both declare file",
+		},
+		{
+			name:     "unknown artifact field",
+			document: strings.Replace(validFormat2IndexTOML, "size = 90210", "size = 90210\nmystery = true", 1),
+			contains: "mystery",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			index, err := LoadIndex([]byte(testCase.document))
+			require.Nil(t, index)
+			requireFetchError(t, err)
+			require.Contains(t, err.Error(), testCase.contains)
+		})
+	}
+}
+
 func TestIndexLoadKeepsBothSectionsDistinctForOneSharedKey(t *testing.T) {
 	document := validIndexTOML + `
 [slices."ios.arm64".libraries."limboai.gdextension"]
@@ -142,13 +252,13 @@ size = 1
 		},
 		{
 			name:     "format above supported maximum",
-			document: strings.Replace(validIndexTOML, "format = 1", "format = 2", 1),
-			contains: []string{"2", "1"},
+			document: strings.Replace(validIndexTOML, "format = 1", "format = 3", 1),
+			contains: []string{"3", "2"},
 		},
 		{
 			name:     "format above supported maximum is reported before any other problem",
-			document: strings.Replace(validIndexTOML, "format = 1", "format = 2\nmystery = true", 1),
-			contains: []string{"format", "2", "1"},
+			document: strings.Replace(validIndexTOML, "format = 1", "format = 3\nmystery = true", 1),
+			contains: []string{"format", "3", "2"},
 		},
 		{
 			name:     "format zero",
@@ -220,7 +330,7 @@ mystery = "value"
 		},
 		{
 			name: "format above the supported maximum with an incompatible field type",
-			document: `format = 2
+			document: `format = 3
 name = "limboai"
 version = "1.4.0"
 
@@ -229,7 +339,7 @@ file = "limboai-1.4.0-core.zip"
 sha256 = "` + coreSliceDigest + `"
 size = "182344"
 `,
-			contains: []string{"format", "2", "1"},
+			contains: []string{"format", "3", "2"},
 		},
 		{
 			name: "slices absent",
@@ -448,10 +558,10 @@ func TestIndexRejectsMalformedPartitionedSections(t *testing.T) {
 }
 
 func TestIndexFormatMismatchMessageNamesBothVersions(t *testing.T) {
-	_, err := LoadIndex([]byte(strings.Replace(validIndexTOML, "format = 1", "format = 2", 1)))
+	_, err := LoadIndex([]byte(strings.Replace(validIndexTOML, "format = 1", "format = 3", 1)))
 	requireFetchError(t, err)
+	require.Contains(t, err.Error(), "3")
 	require.Contains(t, err.Error(), "2")
-	require.Contains(t, err.Error(), "1")
 	require.Contains(t, err.Error(), "format")
 }
 
@@ -666,10 +776,10 @@ func TestIndexChecksumIsSensitiveToWhitespaceOnlyChanges(t *testing.T) {
 }
 
 func TestSupportedIndexFormatIsTheSingleDeclaredMaximum(t *testing.T) {
-	require.Equal(t, 1, SupportedIndexFormat)
+	require.Equal(t, 2, SupportedIndexFormat)
 	index, err := LoadIndex([]byte(validIndexTOML))
 	require.NoError(t, err)
-	require.Equal(t, SupportedIndexFormat, index.Format)
+	require.Equal(t, 1, index.Format)
 }
 
 // TestIndexSectionKeyOwnership pins which platform-tagged keys a slice may
@@ -949,8 +1059,7 @@ func TestIndexRejectsAnEntryWrittenInTheWrongTomlType(t *testing.T) {
 // FetchError rather than a ManifestError, and the rule is asserted at every
 // depth a path occupies: a [libraries] value and a [dependencies] Dictionary key.
 func TestIndexRejectsARelativeEntryValue(t *testing.T) {
-	require.Equal(t, 1, SupportedIndexFormat,
-		"accepting a relative .gdextension value changes no index schema, so the format is unchanged")
+	require.Equal(t, 2, SupportedIndexFormat)
 
 	for _, testCase := range []struct {
 		name     string

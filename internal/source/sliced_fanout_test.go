@@ -17,8 +17,7 @@ import (
 
 // fanOutExtension publishes two architecture slices of one platform plus a
 // generic entry for it, which is the shape `gpm package` fans out: the generic
-// binary lands in both architecture archives so that either one installs on its
-// own.
+// binary lands in one shared artifact that both architecture slices depend on.
 const fanOutExtension = `[configuration]
 
 entry_symbol = "sliced_main"
@@ -66,9 +65,8 @@ version = %q
 // TestSlicedFetchMergesAFannedOutFileSharedByTwoSelectedSlices covers the
 // project that selects two architecture slices of one fanned-out platform, which
 // is routine: an app shipping both macOS architectures declares both, and
-// --all-platforms selects every published slice. Both archives carry the
-// platform's generic binary by design, so the merge has to accept the second
-// copy of it rather than report the publisher's release as broken.
+// --all-platforms selects every published slice. Both slices resolve the same
+// automatic dependency, which must be downloaded and extracted once.
 func TestSlicedFetchMergesAFannedOutFileSharedByTwoSelectedSlices(t *testing.T) {
 	withHost(t, macOSHost)
 	fixture := packFanOutFixture(t, "")
@@ -85,8 +83,12 @@ func TestSlicedFetchMergesAFannedOutFileSharedByTwoSelectedSlices(t *testing.T) 
 	require.NoError(t, err)
 	defer func() { _ = os.RemoveAll(result.Dir) }()
 
-	// A slice archive carries the addon subtree unprefixed, so the fetch
-	// directory is the addon root.
+	require.Equal(t, []string{"macos"}, result.InstalledArtifacts)
+	require.Equal(t, []ArtifactResult{{
+		ID: "macos", Checksum: fixture.index.Artifacts["macos"].SHA256, Size: fixture.index.Artifacts["macos"].Size,
+	}}, result.PublishedArtifacts)
+	// The shared artifact archive carries the addon subtree unprefixed, so the
+	// fetch directory is still the addon root.
 	shared, err := os.ReadFile(filepath.Join(result.Dir, "bin", "addon_macos.dylib"))
 	require.NoError(t, err)
 	require.Equal(t, "generic macos binary", string(shared))
@@ -103,7 +105,7 @@ func TestSlicedFetchMergesAFannedOutFileSharedByTwoSelectedSlices(t *testing.T) 
 
 // TestSlicedFetchMergesAFannedOutExtrasFileSharedByTwoSelectedSlices is the same
 // property for a file no entry key names, which [package.slices] claims
-// generically and the fan-out copies into every architecture slice.
+// generically and the fan-out stores in the shared artifact.
 func TestSlicedFetchMergesAFannedOutExtrasFileSharedByTwoSelectedSlices(t *testing.T) {
 	withHost(t, macOSHost)
 	fixture := packFanOutFixture(t, "\n[package.slices]\n\"macos\" = [\"bin/android/plugin.aar\"]\n")
@@ -146,6 +148,7 @@ func TestSlicedFetchMergesEveryFannedOutSliceUnderAllPlatforms(t *testing.T) {
 
 	require.ElementsMatch(t, []string{"core", "macos.arm64", "macos.universal"},
 		sliceIDStrings(result.InstalledSlices))
+	require.Equal(t, []string{"macos"}, result.InstalledArtifacts)
 	for _, path := range []string{
 		"bin/addon_macos.dylib",
 		"bin/addon_macos_arm64.dylib",

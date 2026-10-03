@@ -39,6 +39,8 @@ type AddonResult struct {
 	// machine-readable form of the selection mode's effect. It is empty for an
 	// unsliced addon.
 	Slices []string `json:"slices,omitempty"`
+	// Artifacts is the shared dependency closure materialized for Slices.
+	Artifacts []string `json:"artifacts,omitempty"`
 }
 
 // Runner performs install orchestration. FetcherFor is injectable for testing;
@@ -194,6 +196,7 @@ func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Mani
 			ResolvedVersion: fetched.ResolvedVersion,
 			InstallPath:     spec.InstallName(),
 			Slices:          slices.Clone(stateEntry.Slices),
+			Artifacts:       slices.Clone(stateEntry.Artifacts),
 		})
 	}
 	// On a full run, drop lock and state entries for addons no longer in the
@@ -284,6 +287,7 @@ func (r *Runner) satisfiedOnDisk(
 		// is where the authoritative error comes from in any case.
 		return AddonResult{}, false
 	}
+	neededArtifacts := artifactClosure(entry, needed)
 	recorded, trusted := recordedSlices(spec, lock, state, r.AddonsDir)
 	if !trusted {
 		return AddonResult{}, false
@@ -294,6 +298,15 @@ func (r *Runner) satisfiedOnDisk(
 	}
 	if len(missingSlicesOnDisk(spec, lock, state, needed, r.AddonsDir)) > 0 {
 		return AddonResult{}, false
+	}
+	recordedArtifactSet := recordedArtifacts(state.Addons[spec.Name])
+	if len(recordedArtifactSet) != len(neededArtifacts) {
+		return AddonResult{}, false
+	}
+	for _, artifact := range neededArtifacts {
+		if _, found := recordedArtifactSet[artifact]; !found {
+			return AddonResult{}, false
+		}
 	}
 	// The question is set equality rather than coverage, so narrowing the
 	// selection re-materializes too: the installer replaces the addon directory
@@ -306,7 +319,28 @@ func (r *Runner) satisfiedOnDisk(
 		ResolvedVersion: entry.ResolvedVersion,
 		InstallPath:     spec.InstallName(),
 		Slices:          slices.Clone(state.Addons[spec.Name].Slices),
+		Artifacts:       slices.Clone(state.Addons[spec.Name].Artifacts),
 	}, true
+}
+
+func artifactClosure(entry manifest.LockEntry, selected []slice.SliceID) []string {
+	set := map[string]struct{}{}
+	for _, id := range selected {
+		if id.Architecture != "" {
+			if _, published := entry.Artifacts[id.Platform]; published {
+				set[id.Platform] = struct{}{}
+			}
+		}
+	}
+	return slices.Sorted(maps.Keys(set))
+}
+
+func recordedArtifacts(entry manifest.StateEntry) map[string]struct{} {
+	recorded := make(map[string]struct{}, len(entry.Artifacts))
+	for _, artifact := range entry.Artifacts {
+		recorded[artifact] = struct{}{}
+	}
+	return recorded
 }
 
 // neededSlices computes the slice IDs spec needs on host from the published set
@@ -426,6 +460,12 @@ func lockEntryFor(spec manifest.AddonSpec, fetched source.FetchResult) manifest.
 	for _, published := range fetched.PublishedSlices {
 		entry.Slices[published.ID.String()] = published.Checksum
 	}
+	if len(fetched.PublishedArtifacts) > 0 {
+		entry.Artifacts = make(map[string]string, len(fetched.PublishedArtifacts))
+		for _, artifact := range fetched.PublishedArtifacts {
+			entry.Artifacts[artifact.ID] = artifact.Checksum
+		}
+	}
 	return entry
 }
 
@@ -442,6 +482,7 @@ func stateEntryFor(entry manifest.LockEntry, fetched source.FetchResult, install
 	return manifest.StateEntry{
 		ResolvedVersion:     fetched.ResolvedVersion,
 		Slices:              installed,
+		Artifacts:           slices.Clone(fetched.InstalledArtifacts),
 		Pin:                 pinOf(entry),
 		FileManifestVersion: manifest.CurrentFileManifestVersion,
 		Files:               slices.Clone(installedFiles),
@@ -536,7 +577,7 @@ func verifyChecksum(spec manifest.AddonSpec, lock *manifest.Lockfile, fetched so
 	// An addon is either sliced or it is not, the same exclusivity the lockfile
 	// validates. A result carrying both would be verified against one pin and
 	// silently installed past the other.
-	if fetched.Checksum != "" && len(fetched.PublishedSlices) > 0 {
+	if fetched.Checksum != "" && (len(fetched.PublishedSlices) > 0 || len(fetched.PublishedArtifacts) > 0) {
 		return &output.FetchError{Err: fmt.Errorf(
 			"addon %q: the fetch reports both a single archive checksum and a published slice set; "+
 				"an addon is either sliced or it is not", spec.Name)}
@@ -606,6 +647,25 @@ func verifySlicePins(name string, entry manifest.LockEntry, fetched source.Fetch
 			return &output.FetchError{Err: fmt.Errorf(
 				"addon %q: slice %q checksum mismatch (lock: %s, fetched: %s)",
 				name, id, entry.Slices[id], fetchedChecksums[id])}
+		}
+	}
+	fetchedArtifacts := make(map[string]string, len(fetched.PublishedArtifacts))
+	for _, artifact := range fetched.PublishedArtifacts {
+		fetchedArtifacts[artifact.ID] = artifact.Checksum
+	}
+	if added := keysAbsentFrom(fetchedArtifacts, entry.Artifacts); len(added) > 0 {
+		return &output.FetchError{Err: fmt.Errorf(
+			"addon %q: the fetch publishes artifacts the lock does not pin: %s", name, strings.Join(added, ", "))}
+	}
+	if removed := keysAbsentFrom(entry.Artifacts, fetchedArtifacts); len(removed) > 0 {
+		return &output.FetchError{Err: fmt.Errorf(
+			"addon %q: the fetch no longer publishes artifacts the lock pins: %s", name, strings.Join(removed, ", "))}
+	}
+	for _, id := range slices.Sorted(maps.Keys(entry.Artifacts)) {
+		if fetchedArtifacts[id] != entry.Artifacts[id] {
+			return &output.FetchError{Err: fmt.Errorf(
+				"addon %q: artifact %q checksum mismatch (lock: %s, fetched: %s)",
+				name, id, entry.Artifacts[id], fetchedArtifacts[id])}
 		}
 	}
 	return nil

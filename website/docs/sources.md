@@ -66,8 +66,9 @@ host supports. `gpm` does not manage an archive credential store.
 ## Which Sources Can Be Sliced
 
 An addon published as [platform slices](slices.md) is fetched from a
-`gpm-index.toml` that names one archive per slice, so only the slices the project
-needs are downloaded.
+`gpm-index.toml` that names one archive per slice. Format 2 may also name shared
+artifacts; gpm downloads only the selected slices and their automatic artifact
+closure.
 
 | Source | Sliced when |
 | --- | --- |
