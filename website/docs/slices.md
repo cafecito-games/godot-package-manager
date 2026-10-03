@@ -643,8 +643,10 @@ is also rejected — an absent section is omitted instead.
 
 An artifact table has the same `file`, `sha256`, and `size` fields as a slice,
 but no platform entries. Its key is a generic platform name such as `android`.
-It must be referenced by at least two architecture slices of that same platform;
-artifacts cannot be declared in `addons.toml` or selected on their own.
+It must be referenced by at least two architecture slices of that same platform,
+and every published architecture slice of that platform must list it in its
+`artifacts` array. Artifacts cannot be declared in `addons.toml` or selected on
+their own.
 
 An archive is resolved by joining `file` to the directory the index was
 downloaded from, so the index and its archives are published side by side. Two
@@ -654,9 +656,10 @@ slices or artifacts may not declare the same `file`.
 
 `format` is read and validated **before any other key is interpreted**. Format 1
 has only slices. Format 2 adds `[artifacts]` and per-slice `artifacts` dependency
-lists. An index declaring a `format` higher than this `gpm` supports is rejected outright rather
-than interpreted in part, because a future format may give an existing key a new
-meaning:
+lists and requires at least one artifact. Format 1 rejects both of those
+format-2 keys. An index declaring a `format` higher than this `gpm` supports is
+rejected outright rather than interpreted in part, because a future format may
+give an existing key a new meaning:
 
 ```text
 $ gpm install

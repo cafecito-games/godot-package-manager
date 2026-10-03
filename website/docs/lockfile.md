@@ -17,7 +17,7 @@ Each entry contains:
 | `checksum` | SHA-256 for archive and GitHub release downloads. |
 | `spec_hash` | Hash of the manifest fields that affect resolution. |
 | `slices` | Every slice ID the addon's index publishes, mapped to that slice archive's SHA-256. Set only for a sliced addon. |
-| `artifacts` | Every format-2 shared artifact, mapped to that artifact archive's SHA-256. |
+| `artifacts` | Every format-2 shared artifact, mapped to that artifact archive's SHA-256. Set only for format 2; requires `slices` and `index_sha256`, and is omitted otherwise. |
 | `index_sha256` | SHA-256 of the raw `gpm-index.toml` bytes the `slices` table was read from. Set exactly when `slices` is set. |
 
 An addon is either sliced or it is not: `checksum` and `slices` are never both
@@ -62,6 +62,10 @@ drop these pins if it rewrites the shared lock without fetching. A current gpm
 detects that legacy shape from machine-local state, verifies the pinned index,
 restores the complete artifact set, and rewrites the lock; the upgrade-first
 rule avoids that churn.
+
+A missing `artifacts` table is the older-gpm shape and is repaired this way. An
+explicit but empty `[addons.<name>.artifacts]` table is not a legacy shape: it
+fails verification instead of being treated as a valid format-2 pin set.
 
 ```toml
 [addons.sentry.artifacts]

@@ -120,12 +120,13 @@ gpm: [project]: invalid platforms entry: invalid platform tag "MacOS": unknown p
 gpm: [project]: invalid platforms entry: platform "core" is implicit and may not be declared; every project receives the core slice
 ```
 
-## A Slice Archive Checksum Does Not Match
+## A Slice Or Shared-Artifact Checksum Does Not Match
 
 A slice archive's bytes do not match the SHA-256 that `addons.lock` pins for it:
 
 ```text
 gpm: addon "limboai": slice "macos" checksum mismatch (lock: 0000000a..., fetched: 2a3441a0...)
+gpm: addon "sentry": artifact "android" checksum mismatch (lock: 0000000b..., fetched: 8ffda2f9...)
 ```
 
 Exit code 4, and nothing is installed. Either the publisher republished the
@@ -133,9 +134,11 @@ release under the same tag, or the lock entry was edited. Confirm the new
 artifacts are the ones you want, then run `gpm update <name>` to re-resolve the
 pins and review the `addons.lock` diff.
 
-An `index_sha256` mismatch, a published slice set that gained or lost a slice,
-and a release that stopped publishing a `gpm-index.toml` altogether all report in
-the same way and have the same remedy.
+An `index_sha256` mismatch, a published slice or artifact set that gained or lost
+an entry, and a release that stopped publishing a `gpm-index.toml` altogether all
+report in the same way and have the same remedy. Artifact-set drift is reported
+as `the fetch publishes artifacts the lock does not pin` or `the fetch no longer
+publishes artifacts the lock pins`.
 
 ## Two Slices Ship The Same Path
 
@@ -144,12 +147,16 @@ have to take it from both:
 
 ```text
 gpm: slices "core" and "linux" both ship "shared.txt"; one path in the merged tree cannot come from two slices
+gpm: artifact "android" and slice "android.arm64" both ship "plugin.aar"; one path in the merged tree cannot come from two archives
 ```
 
 Exit code 4. This is a packaging mistake on the publisher's side and cannot be
 worked around in the project; report it to the addon's author. The comparison is
 case-insensitive, so two differently-cased paths are also reported — on a
-case-insensitive filesystem they are one file.
+case-insensitive filesystem they are one file. Format 1 keeps its narrow legacy
+exception for identical fan-out files in two architecture slices of one
+platform. Format 2 never allows that duplication: shared bytes belong in the
+platform's artifact archive.
 
 ## The Index Format Is Newer Than This gpm
 
