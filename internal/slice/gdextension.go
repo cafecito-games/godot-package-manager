@@ -244,9 +244,9 @@ func ReassembleExtension(core []byte, entries map[SliceID]ExtensionEntries, sele
 	}
 
 	filled := map[ExtensionSection][]*ast.Assignment{}
-	owners := map[ExtensionSection]map[string]SliceID{}
+	owners := map[ExtensionSection]map[string]entryOwner{}
 	for _, section := range PartitionedSections() {
-		owners[section] = map[string]SliceID{}
+		owners[section] = map[string]entryOwner{}
 	}
 
 	for _, id := range deduplicatedSliceIDs(selected) {
@@ -313,7 +313,7 @@ func ReassembleExtension(core []byte, entries map[SliceID]ExtensionEntries, sele
 func reassembleSection[Value any](
 	file *ast.File,
 	filled map[ExtensionSection][]*ast.Assignment,
-	owners map[ExtensionSection]map[string]SliceID,
+	owners map[ExtensionSection]map[string]entryOwner,
 	section ExtensionSection,
 	id SliceID,
 	table ExtensionEntryTable[Value],
@@ -333,7 +333,7 @@ func reassembleSection[Value any](
 func reassembleEntry[Value any](
 	file *ast.File,
 	filled map[ExtensionSection][]*ast.Assignment,
-	owners map[ExtensionSection]map[string]SliceID,
+	owners map[ExtensionSection]map[string]entryOwner,
 	section ExtensionSection,
 	id SliceID,
 	key string,
@@ -361,11 +361,34 @@ func reassembleEntry[Value any](
 	if err != nil {
 		return fetchErrorf("reassembling .gdextension [%s] key %q: %s", section, key, err)
 	}
+	// Two selected slices declaring one key is how `gpm package` fans a
+	// platform's architecture-less entries across the architecture slices of that
+	// platform, so that each one reassembles on its own. A project selecting two
+	// of those architectures then sees the shared key twice, and both copies say
+	// the same thing, so the entry is written once.
+	//
+	// A key declared twice with different values stays an error: either slice may
+	// be selected alone, so neither value is the authoritative one, and picking
+	// one would make the reassembled .gdextension depend on selection order.
+	rendered := format.Expression(expression)
 	if previous, duplicate := owners[section][key]; duplicate {
-		return fetchErrorf(
-			"reassembling .gdextension [%s]: slices %q and %q both declare key %q",
-			section, previous, id, key,
-		)
+		// Only architecture slices of one platform may share a key, which is the
+		// pair the fan-out creates: a generic slice is never published beside the
+		// architecture slices of its platform. Any other pair is a release whose
+		// slices overlap by accident.
+		if previous.id.Platform != id.Platform || previous.id.Architecture == "" || id.Architecture == "" {
+			return fetchErrorf(
+				"reassembling .gdextension [%s]: slices %q and %q both declare key %q",
+				section, previous.id, id, key,
+			)
+		}
+		if previous.expression != rendered {
+			return fetchErrorf(
+				"reassembling .gdextension [%s]: slices %q and %q declare key %q with different values (%s and %s)",
+				section, previous.id, id, key, previous.expression, rendered,
+			)
+		}
+		return nil
 	}
 	if sectionNamed(file, section) == nil {
 		return fetchErrorf(
@@ -373,7 +396,7 @@ func reassembleEntry[Value any](
 			id, section, section,
 		)
 	}
-	owners[section][key] = id
+	owners[section][key] = entryOwner{id: id, expression: rendered}
 	filled[section] = append(filled[section], &ast.Assignment{Key: key, Value: expression})
 	return nil
 }
@@ -908,4 +931,13 @@ func sortedKeys[Value any](table map[string]Value) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// entryOwner records which selected slice declared one reassembled entry and
+// the canonical rendering of the value it declared, which is what lets a key
+// shared by a fanned-out platform's architecture slices be told apart from two
+// slices genuinely disagreeing about it.
+type entryOwner struct {
+	id         SliceID
+	expression string
 }

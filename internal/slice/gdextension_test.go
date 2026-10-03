@@ -862,6 +862,28 @@ func TestExtensionReassemblyIsFailClosed(t *testing.T) {
 			expectedMessage: []string{"macos.debug", "both declare key"},
 		},
 		{
+			// Two architecture slices of one platform may share a key, because
+			// that is what the fan-out creates, but only when they agree about its
+			// value: either slice may be selected alone, so a disagreement has no
+			// authoritative side.
+			name: "two architecture slices declare the same key with different values",
+			core: core,
+			entries: map[SliceID]ExtensionEntries{
+				{Platform: "macos", Architecture: "arm64"}: {
+					Libraries: ExtensionEntryTable[string]{"macos.debug": "res://addons/demo/bin/a.framework"},
+				},
+				{Platform: "macos", Architecture: "universal"}: {
+					Libraries: ExtensionEntryTable[string]{"macos.debug": "res://addons/demo/bin/b.framework"},
+				},
+			},
+			selected: []SliceID{
+				CoreSliceID(),
+				{Platform: "macos", Architecture: "arm64"},
+				{Platform: "macos", Architecture: "universal"},
+			},
+			expectedMessage: []string{"macos.debug", "with different values"},
+		},
+		{
 			name: "the core body declares no section for an entry",
 			core: []byte("[configuration]\n\nentry_symbol = \"demo_init\"\n\n[libraries]\n"),
 			entries: map[SliceID]ExtensionEntries{
@@ -2487,4 +2509,32 @@ func canonicalSectionsOf(t *testing.T, content []byte, addonRoot, extensionPath 
 		}
 	}
 	return sections
+}
+
+// TestExtensionReassemblyAcceptsOneKeySharedByFannedOutSlices covers the
+// selection `gpm package`'s fan-out produces: a platform's architecture-less
+// entries are copied into every architecture slice of that platform so each one
+// reassembles alone, so a project selecting two of those architectures sees the
+// shared key in both. Both copies carry the same value, and the entry is written
+// once.
+func TestExtensionReassemblyAcceptsOneKeySharedByFannedOutSlices(t *testing.T) {
+	core := []byte("[configuration]\n\nentry_symbol = \"demo_init\"\n\n[libraries]\n")
+	arm64 := SliceID{Platform: "macos", Architecture: "arm64"}
+	universal := SliceID{Platform: "macos", Architecture: "universal"}
+	entries := map[SliceID]ExtensionEntries{
+		arm64: {Libraries: ExtensionEntryTable[string]{
+			"macos.editor":               "res://addons/demo/bin/demo.framework",
+			"macos.template_debug.arm64": "res://addons/demo/bin/demo_arm64.framework",
+		}},
+		universal: {Libraries: ExtensionEntryTable[string]{
+			"macos.editor":                     "res://addons/demo/bin/demo.framework",
+			"macos.template_release.universal": "res://addons/demo/bin/demo_universal.framework",
+		}},
+	}
+
+	reassembled, err := ReassembleExtension(core, entries, []SliceID{CoreSliceID(), arm64, universal})
+	require.NoError(t, err)
+	require.Equal(t, 1, strings.Count(string(reassembled), "macos.editor"))
+	require.Contains(t, string(reassembled), "res://addons/demo/bin/demo_arm64.framework")
+	require.Contains(t, string(reassembled), "res://addons/demo/bin/demo_universal.framework")
 }

@@ -247,7 +247,11 @@ func TestPackagerFanOutIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestPackagerFanOutRefusesExtrasNamingASuppressedGenericSlice(t *testing.T) {
+func TestPackagerFanOutCarriesGenericExtrasIntoTheArchitectureSlicesTheyName(t *testing.T) {
+	// [package.slices] names the platform generically, which is the only
+	// spelling available for a payload that is one file for every architecture.
+	// The platform fans out, so the files land in each architecture slice and no
+	// generic slice is published.
 	files := map[string]string{
 		godotJoltAddonPath + "/" + godotJoltExtensionPath: readFixture(t, "godot_jolt.gdextension"),
 		godotJoltAddonPath + "/macos/extra.dylib":         "extra",
@@ -265,13 +269,13 @@ version    = "0.15.0"
 "macos" = ["macos/extra.dylib"]
 `, files)
 
-	_, err := packager.Package(packager.Options{Directory: root})
-	require.Error(t, err)
-	var manifestError *output.ManifestError
-	require.ErrorAs(t, err, &manifestError)
-	require.Equal(t, output.ExitManifest, output.CodeFor(err))
-	require.Contains(t, err.Error(), `"macos"`)
-	require.Contains(t, err.Error(), `"macos.universal"`)
+	result, err := packager.Package(packager.Options{Directory: root})
+	require.NoError(t, err)
+	index := loadEmittedIndex(t, result.Index)
+	require.NotContains(t, index.Slices, "macos")
+	require.Contains(t,
+		archiveEntries(t, filepath.Join(filepath.Dir(result.Index), "godot_jolt-0.15.0-macos.universal.zip")),
+		"macos/extra.dylib")
 }
 
 // TestPackagerFixtureMatchesTheSliceFixture keeps the packager's fan-out fixture
@@ -403,4 +407,73 @@ version    = "1.0.0"
 	var manifestError *output.ManifestError
 	require.ErrorAs(t, err, &manifestError)
 	require.Contains(t, err.Error(), `"macos.arm64"`)
+}
+
+// sentryExtension is the shape of an addon whose Android support is published
+// per ABI: every [libraries] key carries an architecture, so the platform has no
+// generic slice of its own to put a plugin archive in.
+const sentryExtension = `[configuration]
+
+entry_symbol = "sentry_main"
+
+[libraries]
+
+android.debug.arm64 = "bin/android/libsentry.android.debug.arm64.so"
+android.release.arm64 = "bin/android/libsentry.android.release.arm64.so"
+android.debug.arm32 = "bin/android/libsentry.android.debug.arm32.so"
+android.release.arm32 = "bin/android/libsentry.android.release.arm32.so"
+`
+
+// writeSentryAddon lays out that addon plus the two .aar files no entry key
+// references and which Godot needs at Android export time.
+func writeSentryAddon(t *testing.T, slices string) string {
+	t.Helper()
+	return writeAddon(t, `
+[package]
+name       = "sentry"
+addon_path = "addons/sentry"
+version    = "2.3.0"
+`+slices, map[string]string{
+		"addons/sentry/sentry.gdextension":                             sentryExtension,
+		"addons/sentry/plugin.gd":                                      "extends Node\n",
+		"addons/sentry/bin/android/libsentry.android.debug.arm64.so":   "debug arm64",
+		"addons/sentry/bin/android/libsentry.android.release.arm64.so": "release arm64",
+		"addons/sentry/bin/android/libsentry.android.debug.arm32.so":   "debug arm32",
+		"addons/sentry/bin/android/libsentry.android.release.arm32.so": "release arm32",
+		"addons/sentry/bin/android/sentry_godot_plugin.debug.aar":      "debug aar",
+		"addons/sentry/bin/android/sentry_godot_plugin.release.aar":    "release aar",
+	})
+}
+
+func TestPackagerFansAGenericExtrasEntryIntoEveryArchitectureSliceOfItsPlatform(t *testing.T) {
+	root := writeSentryAddon(t, `
+[package.slices]
+"android" = ["bin/android/*.aar"]
+`)
+
+	result, err := packager.Package(packager.Options{Directory: root})
+	require.NoError(t, err)
+	index := loadEmittedIndex(t, result.Index)
+
+	// No generic android slice is published: a host picks the first slice of its
+	// platform it finds, so publishing one beside the ABI slices would hide it.
+	require.Equal(t, []string{"android.arm32", "android.arm64", "core"}, sliceIDs(index))
+
+	outputDirectory := filepath.Dir(result.Index)
+	for _, architecture := range []string{"arm32", "arm64"} {
+		require.Equal(t,
+			[]string{
+				"bin/android/libsentry.android.debug." + architecture + ".so",
+				"bin/android/libsentry.android.release." + architecture + ".so",
+				"bin/android/sentry_godot_plugin.debug.aar",
+				"bin/android/sentry_godot_plugin.release.aar",
+			},
+			archiveEntries(t, filepath.Join(outputDirectory, "sentry-2.3.0-android."+architecture+".zip")),
+			"architecture %s does not carry the platform's generic extras", architecture,
+		)
+	}
+	// The .aar files are the whole point of the extras entry, so they must not
+	// also fall into core, which every consumer downloads on every platform.
+	require.Equal(t, []string{"plugin.gd", "sentry.gdextension"},
+		archiveEntries(t, filepath.Join(outputDirectory, "sentry-2.3.0-core.zip")))
 }

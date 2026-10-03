@@ -101,7 +101,12 @@ version = %q
 
 	result, err := packager.Package(packager.Options{Directory: root})
 	require.NoError(t, err)
+	return loadFixtureOutput(t, result)
+}
 
+// loadFixtureOutput reads one packaging run's index and archives into memory.
+func loadFixtureOutput(t *testing.T, result *packager.Result) slicedFixture {
+	t.Helper()
 	indexBytes, err := os.ReadFile(result.Index)
 	require.NoError(t, err)
 	index, err := slice.LoadIndex(indexBytes)

@@ -386,13 +386,14 @@ func claimExtras(
 	tags := sortedKeys(extras)
 	for position, tag := range tags {
 		id := declared[position]
-		if plan.suppresses(id) {
-			return nil, manifestErrorf(
-				"[package.slices] names slice %q, which is not published: %q declares both architecture-less and architecture-specific entries, so its entries ship in %s instead; name those slices",
-				id, id.Platform, describeSliceIDs(plan.targetsOf(id)),
-			)
+		// A generically named platform that fans out claims its files for every
+		// architecture slice instead of for itself, and is not published: the
+		// generic slice beside the architecture slices is the shape no host would
+		// ever install from.
+		targets := plan.targetsOf(id)
+		for _, target := range targets {
+			claimed[target] = struct{}{}
 		}
-		claimed[id] = struct{}{}
 		for _, pattern := range extras[tag] {
 			matched, err := matchExtras(tree, id, pattern)
 			if err != nil {
@@ -400,7 +401,9 @@ func claimExtras(
 			}
 			origin := fmt.Sprintf("[package.slices] pattern %q", pattern)
 			for _, relativePath := range matched {
-				claims.add(relativePath, fileClaim{id: id, origin: origin})
+				for _, target := range targets {
+					claims.add(relativePath, fileClaim{id: target, origin: origin, fannedOut: target != id})
+				}
 			}
 		}
 	}

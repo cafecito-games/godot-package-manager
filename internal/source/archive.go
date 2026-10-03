@@ -3,6 +3,8 @@ package source
 import (
 	"archive/tar"
 	"archive/zip"
+	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -203,7 +205,7 @@ func extractArchive(nameHint, archivePath, dir string, maxExtracted int64) error
 // one path rather than letting the last one extracted win, and because the check
 // happens before the write, the refusal leaves the earlier archive's file as it
 // was.
-func extractArchiveInto(nameHint, archivePath, dir string, guard *extractGuard, claim func(relative string) error) error {
+func extractArchiveInto(nameHint, archivePath, dir string, guard *extractGuard, claim claimFunc) error {
 	archiveName := archiveNameForDetection(nameHint)
 	switch {
 	case strings.HasSuffix(archiveName, ".zip"):
@@ -275,7 +277,25 @@ func (g *extractGuard) addBytes(n int64) error {
 	return nil
 }
 
-func extractZip(archivePath, dir string, guard *extractGuard, claim func(relative string) error) error {
+// extractDisposition is what a claim callback decides about one archive entry.
+// Its zero value writes the entry, which is what every unclaimed path gets.
+type extractDisposition struct {
+	// shared says another archive already extracted this path and shipping it
+	// twice is intended, so the entry is accepted only if it is byte-identical to
+	// what is already there, and is then discarded rather than rewritten.
+	shared bool
+
+	// mismatch builds the error reported when a shared entry's bytes differ from
+	// what is already extracted. The claim callback supplies it because only the
+	// caller knows which archives the two copies came from.
+	mismatch func() error
+}
+
+// claimFunc records one extracted path and decides how the entry is handled. A
+// nil claim means nothing is tracked and every entry is written.
+type claimFunc func(relative string) (extractDisposition, error)
+
+func extractZip(archivePath, dir string, guard *extractGuard, claim claimFunc) error {
 	reader, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return &output.InstallError{Err: err}
@@ -297,11 +317,24 @@ func extractZip(archivePath, dir string, guard *extractGuard, claim func(relativ
 			}
 			continue
 		}
-		if err := claimExtractedPath(claim, dir, dest); err != nil {
+		disposition, err := claimExtractedPath(claim, dir, dest)
+		if err != nil {
 			return err
 		}
 		if err := guard.addFile(); err != nil {
 			return err
+		}
+		if disposition.shared {
+			readCloser, err := zipFile.Open()
+			if err != nil {
+				return &output.InstallError{Err: err}
+			}
+			err = verifySharedEntry(dest, readCloser, disposition, guard)
+			_ = readCloser.Close()
+			if err != nil {
+				return err
+			}
+			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return &output.InstallError{Err: err}
@@ -319,7 +352,7 @@ func extractZip(archivePath, dir string, guard *extractGuard, claim func(relativ
 	return nil
 }
 
-func extractTarGz(archivePath, dir string, guard *extractGuard, claim func(relative string) error) error {
+func extractTarGz(archivePath, dir string, guard *extractGuard, claim claimFunc) error {
 	file, err := os.Open(archivePath)
 	if err != nil {
 		return &output.InstallError{Err: err}
@@ -350,11 +383,18 @@ func extractTarGz(archivePath, dir string, guard *extractGuard, claim func(relat
 				return &output.InstallError{Err: err}
 			}
 		case tar.TypeReg:
-			if err := claimExtractedPath(claim, dir, dest); err != nil {
+			disposition, err := claimExtractedPath(claim, dir, dest)
+			if err != nil {
 				return err
 			}
 			if err := guard.addFile(); err != nil {
 				return err
+			}
+			if disposition.shared {
+				if err := verifySharedEntry(dest, tarReader, disposition, guard); err != nil {
+					return err
+				}
+				continue
 			}
 			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 				return &output.InstallError{Err: err}
@@ -383,15 +423,91 @@ func safeJoin(base, name string) (string, error) {
 // a path relative to the extraction directory, which is the identity two
 // archives would collide on. A nil hook is the single-archive case, where there
 // is nothing to collide with.
-func claimExtractedPath(claim func(relative string) error, dir, dest string) error {
+func claimExtractedPath(claim claimFunc, dir, dest string) (extractDisposition, error) {
 	if claim == nil {
-		return nil
+		return extractDisposition{}, nil
 	}
 	relative, err := filepath.Rel(filepath.Clean(dir), dest)
 	if err != nil {
-		return &output.InstallError{Err: err}
+		return extractDisposition{}, &output.InstallError{Err: err}
 	}
 	return claim(filepath.ToSlash(relative))
+}
+
+// verifySharedEntry accepts a second copy of an already-extracted path only when
+// its bytes match, and writes nothing either way.
+//
+// The bytes are compared rather than trusted: a producer whose two archives
+// share a path but disagree about its contents is reported instead of installing
+// whichever archive happened to be extracted first.
+//
+// The reader is charged to the guard exactly as a write would be. A duplicate
+// adds nothing to the merged tree, but it is still bytes the archive asked gpm
+// to decompress, and leaving it uncharged would let one path repeated across
+// slices expand past the cap the project set.
+func verifySharedEntry(
+	dest string,
+	reader io.Reader,
+	disposition extractDisposition,
+	guard *extractGuard,
+) error {
+	existing, err := os.Open(dest)
+	if err != nil {
+		return &output.InstallError{Err: err}
+	}
+	defer func() { _ = existing.Close() }()
+
+	remaining := guard.maxBytes - guard.bytes
+	counted := &countingReader{reader: io.LimitReader(reader, remaining+1)}
+	identical, err := readersMatch(existing, counted)
+	if err != nil {
+		return &output.InstallError{Err: err}
+	}
+	if err := guard.addBytes(counted.count); err != nil {
+		return err
+	}
+	if !identical {
+		return disposition.mismatch()
+	}
+	return nil
+}
+
+// countingReader records how many bytes were read through it, so a comparison
+// that stops early still charges the guard for what it consumed.
+type countingReader struct {
+	reader io.Reader
+	count  int64
+}
+
+func (r *countingReader) Read(buffer []byte) (int, error) {
+	read, err := r.reader.Read(buffer)
+	r.count += int64(read)
+	return read, err
+}
+
+// readersMatch reports whether two readers yield the same bytes to EOF.
+func readersMatch(first, second io.Reader) (bool, error) {
+	firstBuffered := bufio.NewReader(first)
+	secondBuffered := bufio.NewReader(second)
+	firstBuffer := make([]byte, 32*1024)
+	secondBuffer := make([]byte, 32*1024)
+	for {
+		firstRead, firstErr := io.ReadFull(firstBuffered, firstBuffer)
+		secondRead, secondErr := io.ReadFull(secondBuffered, secondBuffer)
+		if firstRead != secondRead || !bytes.Equal(firstBuffer[:firstRead], secondBuffer[:secondRead]) {
+			return false, nil
+		}
+		for _, err := range []error{firstErr, secondErr} {
+			if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+				return false, err
+			}
+		}
+		if firstErr != nil || secondErr != nil {
+			// Both readers ended at the same length, which the length check above
+			// already established, so they ended together.
+			return true, nil
+		}
+	}
 }
 
 // writeFile writes reader into dest, enforcing the guard's total-size cap so a
