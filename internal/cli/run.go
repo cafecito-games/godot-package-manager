@@ -153,6 +153,14 @@ func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Mani
 			_ = os.RemoveAll(fetched.Dir)
 			return nil, err
 		}
+		if useLock && lock.Addons[spec.Name].Artifacts == nil && len(fetched.PublishedArtifacts) > 0 {
+			// Format-2-capable gpm releases always write this table. An older
+			// release can silently drop the unknown table while preserving the
+			// index digest, so restore the redundant per-artifact pins after the
+			// exact index document has been verified.
+			r.diagnosef("addon %q: lock has no shared artifact pins; restoring them from pinned %s\n",
+				spec.Name, slice.IndexFileName)
+		}
 
 		// The state record is dropped before the install rather than after it,
 		// so that from here until both files are written this machine claims
@@ -652,6 +660,15 @@ func verifySlicePins(name string, entry manifest.LockEntry, fetched source.Fetch
 	fetchedArtifacts := make(map[string]string, len(fetched.PublishedArtifacts))
 	for _, artifact := range fetched.PublishedArtifacts {
 		fetchedArtifacts[artifact.ID] = artifact.Checksum
+	}
+	// Older gpm releases did not know the artifacts table and could drop it
+	// while rewriting an otherwise intact format-2 lock. The matching index
+	// checksum above already pins the exact document that names every artifact
+	// and checksum, so accepting a nil table is safe; lockEntryFor restores the
+	// redundant pins before this successful install returns. An explicit empty
+	// table is not a legacy shape and still fails the full-set comparison below.
+	if entry.Artifacts == nil {
+		return nil
 	}
 	if added := keysAbsentFrom(fetchedArtifacts, entry.Artifacts); len(added) > 0 {
 		return &output.FetchError{Err: fmt.Errorf(

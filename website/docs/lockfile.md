@@ -58,7 +58,9 @@ closure on one disk remains a `.gpm-state.toml` concern.
 Upgrade every collaborator to a gpm release that supports index format 2 before
 committing a lock with `artifacts`. Older gpm releases still reject a format-2
 index when they fetch it, but their lockfile reader predates this table and may
-drop these pins if it rewrites the shared lock without fetching.
+drop these pins if it rewrites the shared lock without fetching. A current gpm
+repairs that legacy shape by verifying the pinned index, restoring the complete
+artifact set, and rewriting the lock; the upgrade-first rule avoids that churn.
 
 ```toml
 [addons.sentry.artifacts]
