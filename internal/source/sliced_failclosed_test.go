@@ -35,9 +35,17 @@ type craftedSlice struct {
 	body []byte
 	// files are the archive's entries when body is nil.
 	files map[string]string
+	// artifacts are the format-2 shared dependencies of this slice.
+	artifacts []string
 
 	libraries    slice.ExtensionSectionTable[string]
 	dependencies slice.ExtensionSectionTable[slice.ExtensionDependencyTargets]
+}
+
+type craftedArtifact struct {
+	file  string
+	body  []byte
+	files map[string]string
 }
 
 // craftFixture assembles an index over hand-built archives, pinning each by the
@@ -45,11 +53,24 @@ type craftedSlice struct {
 // under test differs from a healthy fixture.
 func craftFixture(t *testing.T, crafted map[string]craftedSlice) slicedFixture {
 	t.Helper()
+	return craftFixtureWithArtifacts(t, crafted, nil)
+}
+
+func craftFixtureWithArtifacts(
+	t *testing.T,
+	crafted map[string]craftedSlice,
+	artifacts map[string]craftedArtifact,
+) slicedFixture {
+	t.Helper()
 	index := &slice.Index{
 		Format:  1,
 		Name:    fixtureAddonName,
 		Version: fixtureVersion,
 		Slices:  map[string]*slice.IndexSlice{},
+	}
+	if len(artifacts) > 0 {
+		index.Format = 2
+		index.Artifacts = map[string]*slice.IndexArtifact{}
 	}
 	fixture := slicedFixture{assets: map[string][]byte{}}
 	for id, definition := range crafted {
@@ -67,8 +88,24 @@ func craftFixture(t *testing.T, crafted map[string]craftedSlice) slicedFixture {
 			File:         name,
 			SHA256:       hex.EncodeToString(digest[:]),
 			Size:         int64(len(body)),
+			Artifacts:    definition.artifacts,
 			Libraries:    definition.libraries,
 			Dependencies: definition.dependencies,
+		}
+	}
+	for id, definition := range artifacts {
+		body := definition.body
+		if body == nil {
+			body = zipArchive(t, definition.files)
+		}
+		name := definition.file
+		if name == "" {
+			name = fmt.Sprintf("%s-%s-shared-%s.zip", fixtureAddonName, fixtureVersion, id)
+		}
+		digest := sha256.Sum256(body)
+		fixture.assets[name] = body
+		index.Artifacts[id] = &slice.IndexArtifact{
+			File: name, SHA256: hex.EncodeToString(digest[:]), Size: int64(len(body)),
 		}
 	}
 	path := filepath.Join(t.TempDir(), slice.IndexFileName)
@@ -80,6 +117,34 @@ func craftFixture(t *testing.T, crafted map[string]craftedSlice) slicedFixture {
 	fixture.indexBytes = indexBytes
 	fixture.index = parsed
 	return fixture
+}
+
+func craftMacOSArtifactFixture(t *testing.T, sharedFiles map[string]string) slicedFixture {
+	t.Helper()
+	return craftMacOSArtifactFixtureParts(t,
+		map[string]string{"plugin.cfg": "[plugin]"},
+		map[string]string{"bin/arm64.dylib": "arm64"},
+		craftedArtifact{files: sharedFiles},
+	)
+}
+
+func craftMacOSArtifactFixtureParts(
+	t *testing.T,
+	coreFiles, arm64Files map[string]string,
+	artifact craftedArtifact,
+) slicedFixture {
+	t.Helper()
+	return craftFixtureWithArtifacts(t, map[string]craftedSlice{
+		"core": {files: coreFiles},
+		"macos.arm64": {
+			files: arm64Files, artifacts: []string{"macos"},
+		},
+		"macos.universal": {
+			files: map[string]string{"bin/universal.dylib": "universal"}, artifacts: []string{"macos"},
+		},
+	}, map[string]craftedArtifact{
+		"macos": artifact,
+	})
 }
 
 // partitionedCoreBody is the fixture .gdextension's core body, produced by the
@@ -230,6 +295,120 @@ func TestSlicedFetchRejectsSliceSizeMismatch(t *testing.T) {
 	requireFetchFailure(t, err, temporaryRoot, output.ExitFetch,
 		`slice "macos": size mismatch`,
 		fmt.Sprintf("index: %d bytes, downloaded: %d bytes", declaredSize+1, declaredSize))
+}
+
+func TestSlicedFetchRejectsInvalidSharedArtifactDownloads(t *testing.T) {
+	withHost(t, macOSHost)
+	tests := []struct {
+		name    string
+		mutate  func(*slice.Index)
+		wantErr []string
+	}{
+		{
+			name: "publisher does not offer the artifact",
+			mutate: func(index *slice.Index) {
+				index.Artifacts["macos"].File = "sliced-1.2.3-shared-macos-missing.zip"
+			},
+			wantErr: []string{`artifact "macos"`, "does not offer"},
+		},
+		{
+			name: "artifact checksum mismatch",
+			mutate: func(index *slice.Index) {
+				index.Artifacts["macos"].SHA256 = strings.Repeat("0", 64)
+			},
+			wantErr: []string{`artifact "macos": checksum mismatch`, strings.Repeat("0", 64)},
+		},
+		{
+			name: "artifact size mismatch",
+			mutate: func(index *slice.Index) {
+				index.Artifacts["macos"].Size++
+			},
+			wantErr: []string{`artifact "macos": size mismatch`},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := craftMacOSArtifactFixture(t, map[string]string{"bin/shared.dylib": "shared"})
+			fixture = fixture.mutateIndex(t, test.mutate)
+			_, temporaryRoot, err := fetchSlicedRelease(t, fixture, manifest.AddonSpec{}, nil)
+			requireFetchFailure(t, err, temporaryRoot, output.ExitFetch, test.wantErr...)
+		})
+	}
+}
+
+func TestSlicedFetchAppliesDownloadCapToSharedArtifact(t *testing.T) {
+	withHost(t, macOSHost)
+	fixture := craftMacOSArtifactFixtureParts(t,
+		map[string]string{"plugin.cfg": "[plugin]"},
+		map[string]string{"bin/arm64.dylib": "arm64"},
+		craftedArtifact{body: bytes.Repeat([]byte("x"), 8192)},
+	)
+	require.Less(t, len(fixture.indexBytes), 4096)
+	_, temporaryRoot, err := fetchSlicedRelease(t, fixture, manifest.AddonSpec{},
+		func(fetcher *GitHubReleaseFetcher) { fetcher.maxBytes = 4096 })
+	requireFetchFailure(t, err, temporaryRoot, output.ExitFetch,
+		`artifact "macos"`, "exceeds maximum download size of 4096 bytes")
+}
+
+func TestSlicedFetchAppliesExtractCapAcrossSliceAndSharedArtifact(t *testing.T) {
+	withHost(t, macOSHost)
+	fixture := craftMacOSArtifactFixtureParts(t,
+		map[string]string{"core.bin": strings.Repeat("c", 150)},
+		map[string]string{"bin/arm64.dylib": "arm64"},
+		craftedArtifact{files: map[string]string{"bin/shared.dylib": strings.Repeat("a", 200)}},
+	)
+	_, temporaryRoot, err := fetchSlicedRelease(t, fixture, manifest.AddonSpec{},
+		func(fetcher *GitHubReleaseFetcher) { fetcher.maxExtracted = 300 })
+	requireFetchFailure(t, err, temporaryRoot, output.ExitFetch,
+		"maximum extracted size of 300 bytes")
+
+	result, _, err := fetchSlicedRelease(t, fixture, manifest.AddonSpec{},
+		func(fetcher *GitHubReleaseFetcher) { fetcher.maxExtracted = 500 })
+	require.NoError(t, err)
+	_ = os.RemoveAll(result.Dir)
+}
+
+func TestSlicedFetchRejectsSharedArtifactPathCollisions(t *testing.T) {
+	withHost(t, macOSHost)
+	tests := []struct {
+		name          string
+		coreFiles     map[string]string
+		arm64Files    map[string]string
+		artifactFiles map[string]string
+		want          []string
+	}{
+		{
+			name:          "core path before artifact",
+			coreFiles:     map[string]string{"bin/shared.dylib": "core"},
+			arm64Files:    map[string]string{"bin/arm64.dylib": "arm64"},
+			artifactFiles: map[string]string{"bin/shared.dylib": "artifact"},
+			want:          []string{`artifact "macos" and slice "core"`, "bin/shared.dylib"},
+		},
+		{
+			name:          "artifact path before architecture slice",
+			coreFiles:     map[string]string{"plugin.cfg": "[plugin]"},
+			arm64Files:    map[string]string{"bin/shared.dylib": "slice"},
+			artifactFiles: map[string]string{"bin/shared.dylib": "artifact"},
+			want:          []string{`artifact "macos" and slice "macos.arm64"`, "bin/shared.dylib"},
+		},
+		{
+			name:          "case-variant path",
+			coreFiles:     map[string]string{"plugin.cfg": "[plugin]"},
+			arm64Files:    map[string]string{"bin/shared.dylib": "slice"},
+			artifactFiles: map[string]string{"bin/SHARED.dylib": "artifact"},
+			want:          []string{"bin/SHARED.dylib", "bin/shared.dylib", "case-insensitive filesystem"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := craftMacOSArtifactFixtureParts(t, test.coreFiles, test.arm64Files,
+				craftedArtifact{files: test.artifactFiles})
+			_, temporaryRoot, err := fetchSlicedRelease(t, fixture, manifest.AddonSpec{}, nil)
+			requireFetchFailure(t, err, temporaryRoot, output.ExitFetch, test.want...)
+		})
+	}
 }
 
 // TestSlicedMergeRejectsCollidingPathsInEitherOrder pins that two slices
