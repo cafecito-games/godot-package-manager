@@ -190,6 +190,7 @@ func (f *slicedFetcher) mergeSlices(
 ) error {
 	guard := newMergeExtractGuard(f.maxExtracted)
 	owners := map[string]extractedPath{}
+	allowLegacyFanOut := index.Format == 1
 	for _, id := range needed {
 		if !id.IsCore() {
 			continue
@@ -198,7 +199,7 @@ func (f *slicedFetcher) mergeSlices(
 		if indexSlice == nil {
 			return fetchErrorf("the index publishes no slice %q", id)
 		}
-		if err := f.mergeSlice(ctx, id, indexSlice, staging, guard, owners); err != nil {
+		if err := f.mergeSlice(ctx, id, indexSlice, staging, guard, owners, allowLegacyFanOut); err != nil {
 			return err
 		}
 	}
@@ -207,7 +208,7 @@ func (f *slicedFetcher) mergeSlices(
 		if artifact == nil {
 			return fetchErrorf("the index publishes no artifact %q", artifactID)
 		}
-		if err := f.mergeArchive(ctx, extractedPath{artifact: artifactID}, artifact.File, artifact.SHA256, artifact.Size, staging, guard, owners); err != nil {
+		if err := f.mergeArchive(ctx, extractedPath{artifact: artifactID}, artifact.File, artifact.SHA256, artifact.Size, staging, guard, owners, false); err != nil {
 			return err
 		}
 	}
@@ -219,7 +220,7 @@ func (f *slicedFetcher) mergeSlices(
 		if indexSlice == nil {
 			return fetchErrorf("the index publishes no slice %q", id)
 		}
-		if err := f.mergeSlice(ctx, id, indexSlice, staging, guard, owners); err != nil {
+		if err := f.mergeSlice(ctx, id, indexSlice, staging, guard, owners, allowLegacyFanOut); err != nil {
 			return err
 		}
 	}
@@ -237,8 +238,9 @@ func (f *slicedFetcher) mergeSlice(
 	staging string,
 	guard *extractGuard,
 	owners map[string]extractedPath,
+	allowLegacyFanOut bool,
 ) error {
-	return f.mergeArchive(ctx, extractedPath{id: id}, indexSlice.File, indexSlice.SHA256, indexSlice.Size, staging, guard, owners)
+	return f.mergeArchive(ctx, extractedPath{id: id}, indexSlice.File, indexSlice.SHA256, indexSlice.Size, staging, guard, owners, allowLegacyFanOut)
 }
 
 func (f *slicedFetcher) mergeArchive(
@@ -249,6 +251,7 @@ func (f *slicedFetcher) mergeArchive(
 	staging string,
 	guard *extractGuard,
 	owners map[string]extractedPath,
+	allowLegacyFanOut bool,
 ) error {
 	downloadURL, found := f.resolve(file)
 	if !found {
@@ -296,7 +299,7 @@ func (f *slicedFetcher) mergeArchive(
 			// stay a collision even when the bytes agree, because nothing about
 			// such a release says the duplication was meant; so do two
 			// differently-cased spellings, which are one file only on some hosts.
-			if existing.artifact != "" || claimed.artifact != "" || !sharedByFanOut(existing.id, claimed.id) || existing.spelling != relative {
+			if !allowLegacyFanOut || existing.artifact != "" || claimed.artifact != "" || !sharedByFanOut(existing.id, claimed.id) || existing.spelling != relative {
 				return extractDisposition{}, collisionError(existing, claimed)
 			}
 			return extractDisposition{

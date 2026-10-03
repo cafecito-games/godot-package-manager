@@ -31,7 +31,10 @@ type StateEntry struct {
 	Files               []string `toml:"files,omitempty"`
 
 	// Pin identifies the lockfile pin these slices were materialized from: a
-	// sliced addon's index_sha256, or an unsliced addon's archive checksum.
+	// format-1 sliced addon's index_sha256, a format-2 addon's
+	// "format2:<index_sha256>", or an unsliced addon's archive checksum. The
+	// value is opaque and must be compared with pinOf(lockEntry), not parsed or
+	// compared directly with IndexChecksum.
 	//
 	// It is recorded because resolved_version does not identify content. A
 	// release keeps its tag when it is republished, so two branches of one

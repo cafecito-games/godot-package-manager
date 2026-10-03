@@ -411,6 +411,28 @@ func TestSlicedFetchRejectsSharedArtifactPathCollisions(t *testing.T) {
 	}
 }
 
+func TestFormat2RejectsLegacyFanOutDuplicatesBetweenArchitectureSlices(t *testing.T) {
+	withHost(t, macOSHost)
+	fixture := craftFixtureWithArtifacts(t, map[string]craftedSlice{
+		"core": {files: map[string]string{"plugin.cfg": "[plugin]"}},
+		"macos.arm64": {
+			files: map[string]string{"bin/duplicated.dylib": "same bytes"}, artifacts: []string{"macos"},
+		},
+		"macos.universal": {
+			files: map[string]string{"bin/duplicated.dylib": "same bytes"}, artifacts: []string{"macos"},
+		},
+	}, map[string]craftedArtifact{
+		"macos": {files: map[string]string{"bin/shared.dylib": "shared once"}},
+	})
+
+	_, temporaryRoot, err := fetchSlicedRelease(t, fixture, manifest.AddonSpec{},
+		func(fetcher *GitHubReleaseFetcher) {
+			fetcher.selectionMode = slice.SelectAllPublishedSlices
+		})
+	requireFetchFailure(t, err, temporaryRoot, output.ExitFetch,
+		`slices "macos.arm64" and "macos.universal"`, "bin/duplicated.dylib")
+}
+
 // TestSlicedMergeRejectsCollidingPathsInEitherOrder pins that two slices
 // shipping one path is an error naming both, and that the message does not
 // depend on which of them was extracted first.
