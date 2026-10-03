@@ -154,12 +154,15 @@ case-insensitive filesystem they are one file.
 ## The Index Format Is Newer Than This gpm
 
 ```text
-gpm: unsupported index format 2: this gpm understands index format 1 at most, so upgrade gpm to install this addon
+gpm: unsupported index format 3: this gpm understands index format 2 at most, so upgrade gpm to install this addon
 ```
 
 Exit code 4. The index is rejected before any other key is read, because a newer
 format may give an existing key a new meaning. Upgrade `gpm`, or pin the addon to
 a version whose index this `gpm` understands.
+
+A gpm release that understands only format 1 reports the corresponding message
+for a format-2 package with shared artifacts; it does not ignore the dependency.
 
 ## An Addon Does Not Load In The Editor
 

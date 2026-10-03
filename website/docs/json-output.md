@@ -59,7 +59,9 @@ a `slices` array:
 the project declares. Under `--host-only` it lists `core` plus the host's slice;
 under `--all-platforms` it lists every published slice. The field is omitted for
 an unsliced addon. A format-2 install also reports an `artifacts` array containing
-the non-selectable shared dependencies materialized for those slices.
+the non-selectable shared dependencies materialized for those slices whenever
+that selected closure is non-empty; `artifacts` is omitted when no selected
+slice needs one.
 
 ## List
 
@@ -96,6 +98,10 @@ declared set:
   }
 ]
 ```
+
+For format 2, `list` also reads the materialized `artifacts` closure from
+`.gpm-state.toml`. The JSON field is omitted when that closure is empty. Text
+output appends the same IDs as `shared:android,ios` after the slice list.
 
 ## Package
 

@@ -514,13 +514,21 @@ Packaged limboai 1.4.0 into 6 slices
 Index: /path/to/addon-repo/dist/gpm-index.toml
 ```
 
-Archives are named `<name>-<version>-<slice>.zip` and are reproducible: entries
-are sorted, timestamps are fixed, and file modes are normalized, so two runs over
-an unchanged tree write identical bytes. `gpm package` performs no network
-access, only ever reads the addon subtree, and writes nothing outside the output
-directory.
+Slice archives are named `<name>-<version>-<slice>.zip`. A format-2 shared
+artifact is named `<name>-<version>-shared-<platform>.zip` and appears after the
+slice list in text output:
 
-Publishing the artifacts remains the author's job:
+```text
+  shared:android   limboai-1.4.0-shared-android.zip  76000 bytes
+```
+
+Both archive kinds are reproducible: entries are sorted, timestamps are fixed,
+and file modes are normalized, so two runs over an unchanged tree write
+identical bytes. `gpm package` performs no network access, only ever reads the
+addon subtree, and writes nothing outside the output directory.
+
+Publishing every slice archive, shared-artifact archive, and the index beside
+one another remains the author's job:
 
 ```bash
 gpm package --version 1.4.0
