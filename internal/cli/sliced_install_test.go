@@ -667,6 +667,14 @@ func TestFormat2InstallRestoresArtifactPinsDroppedByAnOlderClient(t *testing.T) 
 	entry.Artifacts = nil
 	lock.Addons[slicedAddonName] = entry
 	require.NoError(t, lock.Save(lockPath))
+	statePath := filepath.Join(projectRoot, project.StateFileName)
+	state, err := manifest.LoadState(statePath)
+	require.NoError(t, err)
+	stateEntry := state.Addons[slicedAddonName]
+	require.Contains(t, stateEntry.Pin, "format2:")
+	stateEntry.Artifacts = nil
+	state.Addons[slicedAddonName] = stateEntry
+	require.NoError(t, state.Save(statePath))
 
 	requests := publisher.requestCount()
 	stderr := &bytes.Buffer{}
@@ -679,7 +687,7 @@ func TestFormat2InstallRestoresArtifactPinsDroppedByAnOlderClient(t *testing.T) 
 	repaired, err := manifest.LoadLock(lockPath)
 	require.NoError(t, err)
 	require.Contains(t, repaired.Addons[slicedAddonName].Artifacts, "android")
-	state, err := manifest.LoadState(filepath.Join(projectRoot, project.StateFileName))
+	state, err = manifest.LoadState(statePath)
 	require.NoError(t, err)
 	require.Equal(t, []string{"android"}, state.Addons[slicedAddonName].Artifacts)
 }

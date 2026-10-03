@@ -567,11 +567,16 @@ func installedFilesComplete(
 
 // pinOf reduces a lock entry to the digest identifying the content it pins: the
 // index digest for a sliced addon, which in turn pins every slice archive, and
-// the archive checksum for an unsliced one. It is empty for a source with no
-// digest to carry, such as git, whose resolved commit SHA is already its
-// content identity.
+// the archive checksum for an unsliced one. Format 2 tags the otherwise opaque
+// machine-local value so an older client preserves evidence that shared
+// artifacts exist even if it drops the lock and state fields it does not know.
+// It is empty for a source with no digest to carry, such as git, whose resolved
+// commit SHA is already its content identity.
 func pinOf(entry manifest.LockEntry) string {
 	if entry.IndexChecksum != "" {
+		if len(entry.Artifacts) > 0 {
+			return "format2:" + entry.IndexChecksum
+		}
 		return entry.IndexChecksum
 	}
 	return entry.Checksum
