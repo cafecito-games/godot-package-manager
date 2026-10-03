@@ -76,7 +76,10 @@ available. A manifest `checksum` is checked on every fetch. A lockfile
 A consistent lock entry is honored only once `gpm` has also confirmed that this
 machine holds the slices it needs, because the lock says nothing about this disk.
 When the needed set and the recorded set differ in either direction, the addon is
-re-fetched.
+re-fetched. The machine-local state also records the installed file paths. If one
+of those files is missing, `gpm install` re-fetches and replaces the addon; it does
+not hash file contents or reject additional files, so intentional in-place edits
+do not cause a re-fetch loop.
 
 ## Update Behavior
 

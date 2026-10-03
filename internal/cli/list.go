@@ -62,6 +62,12 @@ func newListCommand(opts *Options) *cobra.Command {
 				if info, statErr := os.Stat(filepath.Join(discovered.AddonsDir, spec.InstallName())); statErr == nil {
 					installed = info.IsDir()
 				}
+				// Preserve the historical directory-presence answer for addons
+				// without a file manifest (including manually placed addons), but
+				// use the stronger answer whenever gpm has recorded one.
+				if state.Addons[name].FileManifestVersion == manifest.CurrentFileManifestVersion {
+					_, installed = installedFilesComplete(spec, state, discovered.AddonsDir)
+				}
 				listings = append(listings, addonListing{
 					Name:      name,
 					Source:    string(spec.Source),

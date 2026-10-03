@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -111,6 +112,145 @@ func TestUnslicedAddonIsReMaterializedWhenTheDirectoryIsGone(t *testing.T) {
 	require.Equal(t, 2, calls)
 	_, err = os.Stat(filepath.Join(addonsDir, "dlg", "plugin.cfg"))
 	require.NoError(t, err)
+}
+
+// TestUnslicedAddonIsReMaterializedWhenAnInstalledFileIsGone covers the
+// intra-addon damage case: an intact top-level directory must not let a deleted
+// file satisfy a locked install.
+func TestUnslicedAddonIsReMaterializedWhenAnInstalledFileIsGone(t *testing.T) {
+	projectRoot := t.TempDir()
+	addonsDir := filepath.Join(projectRoot, "addons")
+	calls := 0
+	var diagnostics string
+	addonManifest := &manifest.Manifest{Addons: map[string]manifest.AddonSpec{
+		"dlg": {Name: "dlg", Source: manifest.SourceArchive, URL: "u"},
+	}}
+	runner := &Runner{
+		AddonsDir: addonsDir,
+		LockPath:  filepath.Join(projectRoot, "addons.lock"),
+		StatePath: filepath.Join(projectRoot, project.StateFileName),
+		FetcherFor: func(manifest.AddonSpec) (source.Fetcher, error) {
+			return countingFetcher{version: "1.0", calls: &calls}, nil
+		},
+		Diagnosef: func(format string, args ...any) {
+			diagnostics += fmt.Sprintf(format, args...)
+		},
+	}
+
+	_, err := runner.InstallAddons(context.Background(), addonManifest, nil, ModeInstall)
+	require.NoError(t, err)
+	require.Equal(t, 1, calls)
+
+	pluginPath := filepath.Join(addonsDir, "dlg", "plugin.cfg")
+	require.NoError(t, os.Remove(pluginPath))
+	_, err = runner.InstallAddons(context.Background(), addonManifest, nil, ModeInstall)
+	require.NoError(t, err)
+	require.Equal(t, 2, calls, "the deleted file must invalidate the on-disk fast path")
+	require.FileExists(t, pluginPath)
+	require.Contains(t, diagnostics, `addon "dlg"`)
+	require.Contains(t, diagnostics, "plugin.cfg")
+}
+
+// TestInPlaceFileEditsDoNotInvalidateAnInstall pins the chosen completeness
+// granularity. The state records required paths, not content digests or a ban on
+// additional files, so addon development in the game checkout stays untouched.
+func TestInPlaceFileEditsDoNotInvalidateAnInstall(t *testing.T) {
+	projectRoot := t.TempDir()
+	addonsDir := filepath.Join(projectRoot, "addons")
+	calls := 0
+	addonManifest := &manifest.Manifest{Addons: map[string]manifest.AddonSpec{
+		"dlg": {Name: "dlg", Source: manifest.SourceArchive, URL: "u"},
+	}}
+	runner := &Runner{
+		AddonsDir: addonsDir,
+		LockPath:  filepath.Join(projectRoot, "addons.lock"),
+		StatePath: filepath.Join(projectRoot, project.StateFileName),
+		FetcherFor: func(manifest.AddonSpec) (source.Fetcher, error) {
+			return countingFetcher{version: "1.0", calls: &calls}, nil
+		},
+	}
+	_, err := runner.InstallAddons(context.Background(), addonManifest, nil, ModeInstall)
+	require.NoError(t, err)
+
+	pluginPath := filepath.Join(addonsDir, "dlg", "plugin.cfg")
+	require.NoError(t, os.WriteFile(pluginPath, []byte("intentional edit"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(addonsDir, "dlg", "local.gd"), []byte("local addition"), 0o644))
+	for range 2 {
+		_, err := runner.InstallAddons(context.Background(), addonManifest, nil, ModeInstall)
+		require.NoError(t, err)
+	}
+	require.Equal(t, 1, calls, "content edits and extra files must not cause a re-fetch loop")
+	require.Equal(t, "intentional edit", string(readFileBytes(t, pluginPath)))
+	require.FileExists(t, filepath.Join(addonsDir, "dlg", "local.gd"))
+}
+
+func TestSymlinkedAddonDevelopmentCheckoutIsNotReplaced(t *testing.T) {
+	projectRoot := t.TempDir()
+	addonsDir := filepath.Join(projectRoot, "addons")
+	calls := 0
+	addonManifest := &manifest.Manifest{Addons: map[string]manifest.AddonSpec{
+		"dlg": {Name: "dlg", Source: manifest.SourceArchive, URL: "u"},
+	}}
+	runner := &Runner{
+		AddonsDir: addonsDir,
+		LockPath:  filepath.Join(projectRoot, "addons.lock"),
+		StatePath: filepath.Join(projectRoot, project.StateFileName),
+		FetcherFor: func(manifest.AddonSpec) (source.Fetcher, error) {
+			return countingFetcher{version: "1.0", calls: &calls}, nil
+		},
+	}
+	_, err := runner.InstallAddons(context.Background(), addonManifest, nil, ModeInstall)
+	require.NoError(t, err)
+
+	installRoot := filepath.Join(addonsDir, "dlg")
+	developmentRoot := filepath.Join(projectRoot, "dlg-development")
+	require.NoError(t, os.Rename(installRoot, developmentRoot))
+	if err := os.Symlink(developmentRoot, installRoot); err != nil {
+		t.Skipf("creating a directory symlink is not supported: %v", err)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(developmentRoot, "plugin.cfg"), []byte("development edit"), 0o644))
+
+	_, err = runner.InstallAddons(context.Background(), addonManifest, nil, ModeInstall)
+	require.NoError(t, err)
+	require.Equal(t, 1, calls, "a symlinked development checkout must not be replaced")
+	info, err := os.Lstat(installRoot)
+	require.NoError(t, err)
+	require.NotZero(t, info.Mode()&os.ModeSymlink)
+	require.Equal(t, "development edit", string(readFileBytes(t, filepath.Join(installRoot, "plugin.cfg"))))
+}
+
+func TestLegacyStateWithoutAFileManifestReMaterializesOnce(t *testing.T) {
+	projectRoot := t.TempDir()
+	statePath := filepath.Join(projectRoot, project.StateFileName)
+	calls := 0
+	addonManifest := &manifest.Manifest{Addons: map[string]manifest.AddonSpec{
+		"dlg": {Name: "dlg", Source: manifest.SourceArchive, URL: "u"},
+	}}
+	runner := &Runner{
+		AddonsDir: filepath.Join(projectRoot, "addons"),
+		LockPath:  filepath.Join(projectRoot, "addons.lock"),
+		StatePath: statePath,
+		FetcherFor: func(manifest.AddonSpec) (source.Fetcher, error) {
+			return countingFetcher{version: "1.0", calls: &calls}, nil
+		},
+	}
+	_, err := runner.InstallAddons(context.Background(), addonManifest, nil, ModeInstall)
+	require.NoError(t, err)
+
+	state, err := manifest.LoadState(statePath)
+	require.NoError(t, err)
+	entry := state.Addons["dlg"]
+	entry.FileManifestVersion = 0
+	entry.Files = nil
+	state.Addons["dlg"] = entry
+	require.NoError(t, state.Save(statePath))
+
+	_, err = runner.InstallAddons(context.Background(), addonManifest, nil, ModeInstall)
+	require.NoError(t, err)
+	require.Equal(t, 2, calls, "a legacy state entry must be refreshed to record installed files")
+	_, err = runner.InstallAddons(context.Background(), addonManifest, nil, ModeInstall)
+	require.NoError(t, err)
+	require.Equal(t, 2, calls, "the migrated state entry must satisfy later installs")
 }
 
 // TestStateIsWrittenOnlyForAddonsThatCompleted pins that an aborted run leaves

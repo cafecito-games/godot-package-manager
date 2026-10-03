@@ -64,6 +64,23 @@ func TestListCommandJSON(t *testing.T) {
 	require.Equal(t, true, listing["installed"])
 }
 
+func TestListReportsAnAddonWithADeletedRecordedFileAsNotInstalled(t *testing.T) {
+	withEnvironment(t, nil)
+	withHost(t, hostA)
+	publisher := servePublisher(t, packSlicedFixture(t, "one"))
+	projectRoot := newSlicedProject(t, publisher, "ios.arm64")
+	require.NoError(t, executeGPM(t, io.Discard, io.Discard, "install", "--dir", projectRoot))
+	require.NoError(t, os.Remove(filepath.Join(
+		projectRoot, "addons", slicedAddonName, "scripts", "sliced_tool.gd")))
+
+	stdout := &bytes.Buffer{}
+	require.NoError(t, executeGPM(t, stdout, io.Discard, "list", "--json", "--dir", projectRoot))
+	var listings []addonListing
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &listings))
+	require.Len(t, listings, 1)
+	require.False(t, listings[0].Installed)
+}
+
 // TestListReportsInstalledSlicesFromState pins that `gpm list` reports what is
 // on this disk. It never falls back to the lock's slices table, which is the
 // published set and not what was materialized.
