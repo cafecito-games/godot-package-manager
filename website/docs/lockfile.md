@@ -55,6 +55,11 @@ on every machine. An artifact ID is its generic platform name, so a selected
 architecture slice of that platform pulls it in automatically. The selected
 closure on one disk remains a `.gpm-state.toml` concern.
 
+Upgrade every collaborator to a gpm release that supports index format 2 before
+committing a lock with `artifacts`. Older gpm releases still reject a format-2
+index when they fetch it, but their lockfile reader predates this table and may
+drop these pins if it rewrites the shared lock without fetching.
+
 ```toml
 [addons.sentry.artifacts]
   android = "8ffda2f9a5237ddc7551d0d34db55cf01b79260ad9943166a54d829f57100f7b"
@@ -62,8 +67,8 @@ closure on one disk remains a `.gpm-state.toml` concern.
 
 `index_sha256` pins the index document itself, so a retagged release cannot
 silently repoint the slice archives. On a locked install the fetched index digest,
-the published slice and artifact sets, and every archive checksum are all compared against the
-lock, whatever the selection mode.
+the published slice and artifact sets, and every archive checksum are all
+compared against the lock, whatever the selection mode.
 
 `addons.lock` is the only verification authority. `.gpm-state.toml` records what
 is on disk and never vouches for its contents.
