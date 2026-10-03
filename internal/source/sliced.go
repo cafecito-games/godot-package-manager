@@ -3,6 +3,7 @@ package source
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -109,6 +110,7 @@ func (f *slicedFetcher) fetch(ctx context.Context, spec manifest.AddonSpec, inde
 	if err != nil {
 		return FetchResult{}, err
 	}
+	requiredArtifacts := index.RequiredArtifacts(selection.Slices)
 	diagnostics := slices.Clone(f.diagnostics)
 	if !selection.HostSupported {
 		// Not a failure: the addon may simply not support this machine, which is
@@ -123,7 +125,7 @@ func (f *slicedFetcher) fetch(ctx context.Context, spec manifest.AddonSpec, inde
 	if err != nil {
 		return FetchResult{}, &output.FetchError{Err: err}
 	}
-	if err := f.mergeSlices(ctx, index, selection.Slices, staging); err != nil {
+	if err := f.mergeSlices(ctx, index, selection.Slices, requiredArtifacts, staging); err != nil {
 		_ = os.RemoveAll(staging)
 		return FetchResult{}, err
 	}
@@ -137,11 +139,13 @@ func (f *slicedFetcher) fetch(ctx context.Context, spec manifest.AddonSpec, inde
 		ResolvedVersion: spec.Version,
 		// Deliberately empty: a sliced addon has no single archive, and the
 		// per-slice checksums verified above carry its integrity instead.
-		Checksum:        "",
-		IndexChecksum:   indexChecksum,
-		PublishedSlices: publishedSliceResults(index, published),
-		InstalledSlices: sortedSliceIDs(selection.Slices),
-		Diagnostics:     diagnostics,
+		Checksum:           "",
+		IndexChecksum:      indexChecksum,
+		PublishedSlices:    publishedSliceResults(index, published),
+		InstalledSlices:    sortedSliceIDs(selection.Slices),
+		PublishedArtifacts: publishedArtifactResults(index),
+		InstalledArtifacts: slices.Clone(requiredArtifacts),
+		Diagnostics:        diagnostics,
 	}, nil
 }
 
@@ -181,16 +185,42 @@ func (f *slicedFetcher) mergeSlices(
 	ctx context.Context,
 	index *slice.Index,
 	needed []slice.SliceID,
+	artifacts []string,
 	staging string,
 ) error {
 	guard := newMergeExtractGuard(f.maxExtracted)
 	owners := map[string]extractedPath{}
+	allowLegacyFanOut := index.Format == 1
 	for _, id := range needed {
+		if !id.IsCore() {
+			continue
+		}
 		indexSlice := index.Slices[id.String()]
 		if indexSlice == nil {
 			return fetchErrorf("the index publishes no slice %q", id)
 		}
-		if err := f.mergeSlice(ctx, id, indexSlice, staging, guard, owners); err != nil {
+		if err := f.mergeSlice(ctx, id, indexSlice, staging, guard, owners, allowLegacyFanOut); err != nil {
+			return err
+		}
+	}
+	for _, artifactID := range artifacts {
+		artifact := index.Artifacts[artifactID]
+		if artifact == nil {
+			return fetchErrorf("the index publishes no artifact %q", artifactID)
+		}
+		if err := f.mergeArchive(ctx, extractedPath{artifact: artifactID}, artifact.File, artifact.SHA256, artifact.Size, staging, guard, owners, false); err != nil {
+			return err
+		}
+	}
+	for _, id := range needed {
+		if id.IsCore() {
+			continue
+		}
+		indexSlice := index.Slices[id.String()]
+		if indexSlice == nil {
+			return fetchErrorf("the index publishes no slice %q", id)
+		}
+		if err := f.mergeSlice(ctx, id, indexSlice, staging, guard, owners, allowLegacyFanOut); err != nil {
 			return err
 		}
 	}
@@ -208,48 +238,60 @@ func (f *slicedFetcher) mergeSlice(
 	staging string,
 	guard *extractGuard,
 	owners map[string]extractedPath,
+	allowLegacyFanOut bool,
 ) error {
-	downloadURL, found := f.resolve(indexSlice.File)
+	return f.mergeArchive(ctx, extractedPath{id: id}, indexSlice.File, indexSlice.SHA256, indexSlice.Size, staging, guard, owners, allowLegacyFanOut)
+}
+
+func (f *slicedFetcher) mergeArchive(
+	ctx context.Context,
+	owner extractedPath,
+	file, checksum string,
+	size int64,
+	staging string,
+	guard *extractGuard,
+	owners map[string]extractedPath,
+	allowLegacyFanOut bool,
+) error {
+	downloadURL, found := f.resolve(file)
 	if !found {
-		return fetchErrorf(
-			"slice %q names archive %q, which the addon's publisher does not offer", id, indexSlice.File)
+		return fetchErrorf("%s names archive %q, which the addon's publisher does not offer", owner.description(), file)
 	}
-	// The cap is applied per slice, which is what --max-download-size means: a
-	// single archive the project is willing to download.
-	archivePath, checksum, err := downloadToFile(ctx, f.client, downloadURL, f.header, f.maxBytes)
+	// The cap is applied per archive, which is what --max-download-size means:
+	// one slice or shared artifact the project is willing to download.
+	archivePath, downloadedChecksum, err := downloadToFile(ctx, f.client, downloadURL, f.header, f.maxBytes)
 	if err != nil {
-		return fetchErrorf("downloading slice %q: %s", id, err)
+		return fetchErrorf("downloading %s: %s", owner.description(), err)
 	}
 	defer func() { _ = os.Remove(archivePath) }()
 
-	if checksum != indexSlice.SHA256 {
+	if downloadedChecksum != checksum {
 		return fetchErrorf(
-			"slice %q: checksum mismatch (index: %s, downloaded: %s)", id, indexSlice.SHA256, checksum)
+			"%s: checksum mismatch (index: %s, downloaded: %s)", owner.description(), checksum, downloadedChecksum)
 	}
 	info, err := os.Stat(archivePath)
 	if err != nil {
 		return &output.FetchError{Err: err}
 	}
-	if info.Size() != indexSlice.Size {
+	if info.Size() != size {
 		return fetchErrorf(
-			"slice %q: size mismatch (index: %d bytes, downloaded: %d bytes)",
-			id, indexSlice.Size, info.Size())
+			"%s: size mismatch (index: %d bytes, downloaded: %d bytes)",
+			owner.description(), size, info.Size())
 	}
-	return extractArchiveInto(indexSlice.File, archivePath, staging, guard,
+	return extractArchiveInto(file, archivePath, staging, guard,
 		func(relative string) (extractDisposition, error) {
-			claimed := extractedPath{id: id, spelling: relative}
+			claimed := owner
+			claimed.spelling = relative
 			key := mergeClaimKey(relative)
-			owner, taken := owners[key]
+			existing, taken := owners[key]
 			if !taken {
 				owners[key] = claimed
 				return extractDisposition{}, nil
 			}
-			// Two slices shipping one path is how `gpm package` fans a platform's
-			// generic payload across the architecture slices of that platform, so
-			// that each one installs on its own. A project selecting two of those
-			// architectures — one declaring both Android ABIs, or any project run
-			// with --all-platforms — therefore legitimately extracts the shared
-			// file twice.
+			// The duplicate exemption is only for legacy format-1 indexes, where
+			// producer fan-out copied one generic platform payload into multiple
+			// architecture slices. Format 2 stores that payload in an artifact,
+			// and an artifact never participates in the exemption.
 			//
 			// Only that shape is accepted, which is exactly the duplication the
 			// packager's own claim rule permits: two architecture slices of one
@@ -257,12 +299,12 @@ func (f *slicedFetcher) mergeSlice(
 			// stay a collision even when the bytes agree, because nothing about
 			// such a release says the duplication was meant; so do two
 			// differently-cased spellings, which are one file only on some hosts.
-			if !sharedByFanOut(owner.id, id) || owner.spelling != relative {
-				return extractDisposition{}, collisionError(owner, claimed)
+			if !allowLegacyFanOut || existing.artifact != "" || claimed.artifact != "" || !sharedByFanOut(existing.id, claimed.id) || existing.spelling != relative {
+				return extractDisposition{}, collisionError(existing, claimed)
 			}
 			return extractDisposition{
 				shared:   true,
-				mismatch: func() error { return divergentSharedPathError(owner, claimed) },
+				mismatch: func() error { return divergentSharedPathError(existing, claimed) },
 			}, nil
 		})
 }
@@ -272,7 +314,15 @@ func (f *slicedFetcher) mergeSlice(
 // differ.
 type extractedPath struct {
 	id       slice.SliceID
+	artifact string
 	spelling string
+}
+
+func (path extractedPath) description() string {
+	if path.artifact != "" {
+		return fmt.Sprintf("artifact %q", path.artifact)
+	}
+	return fmt.Sprintf("slice %q", path.id)
 }
 
 // mergeClaimKey reduces an extracted path to the identity two archives would
@@ -293,21 +343,35 @@ func mergeClaimKey(relative string) string {
 // however the slices were merged.
 func collisionError(owner, claimed extractedPath) error {
 	first, second := owner, claimed
-	if second.id.String() < first.id.String() {
+	if first.artifact == "" && second.artifact == "" {
+		if second.id.String() < first.id.String() {
+			first, second = second, first
+		}
+		const remedy = "one path in the merged tree cannot come from two slices"
+		switch {
+		case first.spelling == second.spelling:
+			return fetchErrorf("slices %q and %q both ship %q; %s", first.id, second.id, first.spelling, remedy)
+		case first.id == second.id:
+			return fetchErrorf("slice %q ships both %q and %q, which are one file on a case-insensitive filesystem; %s", first.id, first.spelling, second.spelling, remedy)
+		default:
+			return fetchErrorf("slices %q and %q ship %q and %q, which are one file on a case-insensitive filesystem; %s", first.id, second.id, first.spelling, second.spelling, remedy)
+		}
+	}
+	if second.description() < first.description() {
 		first, second = second, first
 	}
-	const remedy = "one path in the merged tree cannot come from two slices"
+	const remedy = "one path in the merged tree cannot come from two archives"
 	switch {
 	case first.spelling == second.spelling:
-		return fetchErrorf("slices %q and %q both ship %q; %s", first.id, second.id, first.spelling, remedy)
-	case first.id == second.id:
+		return fetchErrorf("%s and %s both ship %q; %s", first.description(), second.description(), first.spelling, remedy)
+	case first.description() == second.description():
 		return fetchErrorf(
-			"slice %q ships both %q and %q, which are one file on a case-insensitive filesystem; %s",
-			first.id, first.spelling, second.spelling, remedy)
+			"%s ships both %q and %q, which are one file on a case-insensitive filesystem; %s",
+			first.description(), first.spelling, second.spelling, remedy)
 	default:
 		return fetchErrorf(
-			"slices %q and %q ship %q and %q, which are one file on a case-insensitive filesystem; %s",
-			first.id, second.id, first.spelling, second.spelling, remedy)
+			"%s and %s ship %q and %q, which are one file on a case-insensitive filesystem; %s",
+			first.description(), second.description(), first.spelling, second.spelling, remedy)
 	}
 }
 
@@ -477,6 +541,15 @@ func publishedSliceResults(index *slice.Index, published []slice.SliceID) []Slic
 			continue
 		}
 		results = append(results, SliceResult{ID: id, Checksum: indexSlice.SHA256, Size: indexSlice.Size})
+	}
+	return results
+}
+
+func publishedArtifactResults(index *slice.Index) []ArtifactResult {
+	results := make([]ArtifactResult, 0, len(index.Artifacts))
+	for _, id := range slices.Sorted(maps.Keys(index.Artifacts)) {
+		artifact := index.Artifacts[id]
+		results = append(results, ArtifactResult{ID: id, Checksum: artifact.SHA256, Size: artifact.Size})
 	}
 	return results
 }

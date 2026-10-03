@@ -86,6 +86,7 @@ func TestStateSaveIsDeterministic(t *testing.T) {
 		"zeta": {
 			ResolvedVersion:     "v1",
 			Slices:              []string{"windows.x86_64", "core", "macos"},
+			Artifacts:           []string{"windows", "android"},
 			FileManifestVersion: CurrentFileManifestVersion,
 			Files:               []string{"zeta.gd", "plugin.cfg", "scripts/main.gd"},
 		},
@@ -106,6 +107,7 @@ func TestStateSaveIsDeterministic(t *testing.T) {
 
 	requireAscendingOrder(t, string(firstData), []string{`[addons.alpha]`, `[addons.limboai]`, `[addons.zeta]`})
 	requireAscendingOrder(t, string(firstData), []string{`"core", "macos", "windows.x86_64"`})
+	requireAscendingOrder(t, string(firstData), []string{`"android", "windows"`})
 	requireAscendingOrder(t, string(firstData), []string{`"plugin.cfg", "scripts/main.gd", "zeta.gd"`})
 }
 
@@ -116,12 +118,14 @@ func TestStateSaveDoesNotMutateReceiver(t *testing.T) {
 		"limboai": {
 			ResolvedVersion:     "v1",
 			Slices:              []string{"windows.x86_64", "core"},
+			Artifacts:           []string{"windows", "android"},
 			FileManifestVersion: CurrentFileManifestVersion,
 			Files:               []string{"z.gd", "a.gd"},
 		},
 	}}
 	require.NoError(t, state.Save(filepath.Join(t.TempDir(), ".gpm-state.toml")))
 	require.Equal(t, []string{"windows.x86_64", "core"}, state.Addons["limboai"].Slices)
+	require.Equal(t, []string{"windows", "android"}, state.Addons["limboai"].Artifacts)
 	require.Equal(t, []string{"z.gd", "a.gd"}, state.Addons["limboai"].Files)
 }
 

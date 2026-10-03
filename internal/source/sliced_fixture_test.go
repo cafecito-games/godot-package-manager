@@ -118,6 +118,11 @@ func loadFixtureOutput(t *testing.T, result *packager.Result) slicedFixture {
 		require.NoError(t, err)
 		fixture.assets[published.File] = body
 	}
+	for _, published := range result.Artifacts {
+		body, err := os.ReadFile(filepath.Join(filepath.Dir(result.Index), published.File))
+		require.NoError(t, err)
+		fixture.assets[published.File] = body
+	}
 	return fixture
 }
 

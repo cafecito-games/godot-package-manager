@@ -18,8 +18,9 @@ const CurrentFileManifestVersion = 1
 
 // StateEntry records what one addon materialized on this machine.
 type StateEntry struct {
-	ResolvedVersion string   `toml:"resolved_version"` // the version these slices came from
-	Slices          []string `toml:"slices"`           // slice IDs present in addons/ on this disk
+	ResolvedVersion string   `toml:"resolved_version"`    // the version these slices came from
+	Slices          []string `toml:"slices"`              // slice IDs present in addons/ on this disk
+	Artifacts       []string `toml:"artifacts,omitempty"` // shared artifact IDs present on this disk
 
 	// FileManifestVersion selects the on-disk completeness check. Version 1
 	// records the relative paths of installed regular files in Files and checks
@@ -30,7 +31,10 @@ type StateEntry struct {
 	Files               []string `toml:"files,omitempty"`
 
 	// Pin identifies the lockfile pin these slices were materialized from: a
-	// sliced addon's index_sha256, or an unsliced addon's archive checksum.
+	// format-1 sliced addon's index_sha256, a format-2 addon's
+	// "format2:<index_sha256>", or an unsliced addon's archive checksum. The
+	// value is opaque and must be compared with pinOf(lockEntry), not parsed or
+	// compared directly with IndexChecksum.
 	//
 	// It is recorded because resolved_version does not identify content. A
 	// release keeps its tag when it is republished, so two branches of one
@@ -146,6 +150,7 @@ func (state *State) sorted() *State {
 	normalized := &State{Addons: make(map[string]StateEntry, len(state.Addons))}
 	for name, entry := range state.Addons {
 		entry.Slices = slices.Sorted(slices.Values(entry.Slices))
+		entry.Artifacts = slices.Sorted(slices.Values(entry.Artifacts))
 		entry.Files = slices.Sorted(slices.Values(entry.Files))
 		normalized.Addons[name] = entry
 	}

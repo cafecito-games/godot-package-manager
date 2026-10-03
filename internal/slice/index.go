@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,7 +21,7 @@ import (
 // understands. It is the single declaration of that maximum: an index declaring
 // a higher format is rejected outright rather than interpreted in part, because
 // a future format may give an existing key a new meaning.
-const SupportedIndexFormat = 1
+const SupportedIndexFormat = 2
 
 // resourcePrefix is the Godot resource scheme every partitioned entry value
 // starts with. An entry value is resolved against the installed project, so a
@@ -42,6 +43,11 @@ type Index struct {
 	Name    string `toml:"name"`
 	Version string `toml:"version"`
 
+	// Artifacts are format-2, non-selectable archives shared by two or more
+	// architecture slices. A selected slice pulls its named artifacts in as
+	// automatic dependencies; artifacts never participate in platform selection.
+	Artifacts map[string]*IndexArtifact `toml:"artifacts,omitempty"`
+
 	// Slices maps a slice ID in its canonical tag form to the archive publishing
 	// it. The key is parsed with ParseSliceID, so "core" is accepted here.
 	Slices map[string]*IndexSlice `toml:"slices"`
@@ -61,6 +67,10 @@ type IndexSlice struct {
 	// Size is the archive's size in bytes.
 	Size int64 `toml:"size"`
 
+	// Artifacts names the format-2 shared archives this selectable slice needs.
+	// The names resolve in Index.Artifacts and are not slice IDs.
+	Artifacts []string `toml:"artifacts,omitempty"`
+
 	// Libraries and Dependencies are the partitioned .gdextension sections, each
 	// mapping a .gdextension path relative to the addon root to that section's
 	// platform-tagged entries. A Godot platform tag legitimately appears in
@@ -74,6 +84,15 @@ type IndexSlice struct {
 	// the order they are written and validated in.
 	Libraries    ExtensionSectionTable[string]                     `toml:"libraries,omitempty"`
 	Dependencies ExtensionSectionTable[ExtensionDependencyTargets] `toml:"dependencies,omitempty"`
+}
+
+// IndexArtifact is one format-2 shared archive. It deliberately carries no
+// platform entries and cannot be selected directly; only an IndexSlice may
+// pull it into an install closure.
+type IndexArtifact struct {
+	File   string `toml:"file"`
+	SHA256 string `toml:"sha256"`
+	Size   int64  `toml:"size"`
 }
 
 // ExtensionEntryTable is one .gdextension section's platform-tagged entries for
@@ -176,7 +195,7 @@ func LoadIndex(data []byte) (*Index, error) {
 	if err != nil {
 		return nil, fetchErrorf("parsing index: %w", err)
 	}
-	if err := rejectUnknownIndexKeys(metaData); err != nil {
+	if err := rejectUnknownIndexKeys(metaData, index.Format); err != nil {
 		return nil, err
 	}
 	if err := index.validate(); err != nil {
@@ -207,13 +226,13 @@ func validateIndexFormat(format int, metaData toml.MetaData) error {
 // rejectUnknownIndexKeys fails on any key the schema does not declare. Strict
 // decoding is the point: a key silently ignored today could carry meaning in a
 // future format, and ignoring it would misread the index rather than report it.
-func rejectUnknownIndexKeys(metaData toml.MetaData) error {
+func rejectUnknownIndexKeys(metaData toml.MetaData, format int) error {
 	// The TOML library matches a struct field case-insensitively when no exact
 	// match exists, and records the document's own spelling as decoded. TOML keys
 	// are case-sensitive, so a key that differs only in case is an unknown key
 	// that strict decoding alone would let through.
 	for _, key := range metaData.Keys() {
-		if err := rejectMisspelledIndexKey(metaData, key); err != nil {
+		if err := rejectMisspelledIndexKey(metaData, key, format); err != nil {
 			return err
 		}
 	}
@@ -231,19 +250,22 @@ func rejectUnknownIndexKeys(metaData toml.MetaData) error {
 		}
 	}
 	if len(smallest) >= 3 && smallest[0] == "slices" {
-		return unknownSliceKeyError(strings.Join(smallest[2:], "."), smallest[1])
+		return unknownSliceKeyError(strings.Join(smallest[2:], "."), smallest[1], format)
 	}
-	return unknownIndexKeyError(strings.Join(smallest, "."))
+	return unknownIndexKeyError(strings.Join(smallest, "."), format)
 }
 
 // topLevelIndexKeys is the exact spelling of every key the index declares at the
 // top level.
-var topLevelIndexKeys = []string{"format", "name", "version", "slices"}
+var topLevelIndexKeys = []string{"format", "name", "version", "artifacts", "slices"}
 
 // sliceFieldNames returns the exact spelling of every key a slice table declares,
 // reading the partitioned sections from their single declaration.
-func sliceFieldNames() []string {
+func sliceFieldNames(format int) []string {
 	names := []string{"file", "sha256", "size"}
+	if format >= 2 {
+		names = append(names, "artifacts")
+	}
 	for _, section := range PartitionedSections() {
 		names = append(names, string(section))
 	}
@@ -253,28 +275,40 @@ func sliceFieldNames() []string {
 // rejectMisspelledIndexKey checks one document key against the schema at the
 // position it appears in. Positions the schema leaves open — a slice ID, a
 // .gdextension path, a platform tag — are validated later as values, not here.
-func rejectMisspelledIndexKey(metaData toml.MetaData, key toml.Key) error {
+func rejectMisspelledIndexKey(metaData toml.MetaData, key toml.Key, format int) error {
 	if len(key) == 0 {
 		return nil
 	}
 	if !slices.Contains(topLevelIndexKeys, key[0]) {
-		return unknownIndexKeyError(strings.Join(key, "."))
+		return unknownIndexKeyError(strings.Join(key, "."), format)
 	}
-	if key[0] != "slices" {
-		if len(key) > 1 {
-			return unknownIndexKeyError(strings.Join(key, "."))
+	if key[0] == "artifacts" {
+		if format < 2 {
+			return unknownIndexKeyError(strings.Join(key, "."), format)
+		}
+		if len(key) >= 3 && !slices.Contains([]string{"file", "sha256", "size"}, key[2]) {
+			return unknownArtifactKeyError(strings.Join(key[2:], "."), key[1], format)
+		}
+		if len(key) > 3 {
+			return unknownArtifactKeyError(strings.Join(key[2:], "."), key[1], format)
 		}
 		return nil
 	}
-	if len(key) >= 3 && !slices.Contains(sliceFieldNames(), key[2]) {
-		return unknownSliceKeyError(strings.Join(key[2:], "."), key[1])
+	if key[0] != "slices" {
+		if len(key) > 1 {
+			return unknownIndexKeyError(strings.Join(key, "."), format)
+		}
+		return nil
+	}
+	if len(key) >= 3 && !slices.Contains(sliceFieldNames(format), key[2]) {
+		return unknownSliceKeyError(strings.Join(key[2:], "."), key[1], format)
 	}
 	if len(key) >= 4 {
 		// A key below a slice's own fields is inside a partitioned section, and
 		// how deep that section nests is the section's own property.
 		maximumDepth, partitioned := indexSectionKeyDepth(ExtensionSection(key[2]))
 		if !partitioned || len(key) > maximumDepth {
-			return unknownSliceKeyError(strings.Join(key[2:], "."), key[1])
+			return unknownSliceKeyError(strings.Join(key[2:], "."), key[1], format)
 		}
 		if err := requireIndexEntryValueType(metaData, key); err != nil {
 			return err
@@ -346,17 +380,32 @@ func requireIndexEntryValueType(metaData toml.MetaData, key toml.Key) error {
 	)
 }
 
-func unknownIndexKeyError(key string) error {
+func unknownIndexKeyError(key string, format int) error {
+	understands := "format, name, version, and [slices]"
+	if format >= 2 {
+		understands = "format, name, version, [artifacts], and [slices]"
+	}
 	return fetchErrorf(
-		"unknown key %q in index: format %d understands format, name, version, and [slices]",
-		key, SupportedIndexFormat,
+		"unknown key %q in index: format %d understands %s",
+		key, format, understands,
 	)
 }
 
-func unknownSliceKeyError(key, sliceKey string) error {
+func unknownSliceKeyError(key, sliceKey string, format int) error {
+	fields := "file, sha256, size, and the partitioned tables " + describeSections()
+	if format >= 2 {
+		fields = "file, sha256, size, artifacts, and the partitioned tables " + describeSections()
+	}
 	return fetchErrorf(
-		"unknown key %q in index slice %q: format %d understands file, sha256, size, and the partitioned tables %s",
-		key, sliceKey, SupportedIndexFormat, describeSections(),
+		"unknown key %q in index slice %q: format %d understands %s",
+		key, sliceKey, format, fields,
+	)
+}
+
+func unknownArtifactKeyError(key, artifactKey string, format int) error {
+	return fetchErrorf(
+		"unknown key %q in index artifact %q: format %d understands file, sha256, and size",
+		key, artifactKey, format,
 	)
 }
 
@@ -382,6 +431,12 @@ func (index *Index) validate() error {
 	}
 	if len(index.Slices) == 0 {
 		return fetchErrorf("index declares no [slices]; an index publishes at least the %q slice", CorePlatform)
+	}
+	if index.Format == 1 && len(index.Artifacts) > 0 {
+		return fetchErrorf("index format 1 cannot declare shared artifacts")
+	}
+	if index.Format == 2 && len(index.Artifacts) == 0 {
+		return fetchErrorf("index format 2 declares no [artifacts]; format 2 is used only when slices share an archive")
 	}
 
 	keys := make([]string, 0, len(index.Slices))
@@ -409,7 +464,25 @@ func (index *Index) validate() error {
 		return fetchErrorf("index publishes no %q slice, which is mandatory because every project needs it", CorePlatform)
 	}
 
-	declaredFiles := make(map[string]string, len(keys))
+	declaredFiles := make(map[string]string, len(keys)+len(index.Artifacts))
+	artifactReferences := make(map[string]int, len(index.Artifacts))
+	for _, key := range sortedKeys(index.Artifacts) {
+		artifact := index.Artifacts[key]
+		id, err := ParseSliceID(key)
+		if err != nil || id.IsCore() || id.Architecture != "" {
+			return fetchErrorf("invalid index artifact key %q: an artifact key must be one generic platform name", key)
+		}
+		if artifact == nil {
+			return fetchErrorf("index artifact %q declares no fields", key)
+		}
+		if err := validateIndexArtifact(key, artifact); err != nil {
+			return err
+		}
+		if owner, found := declaredFiles[artifact.File]; found {
+			return fetchErrorf("index archives %s and artifact %q both declare file %q; one archive name identifies one artifact", owner, key, artifact.File)
+		}
+		declaredFiles[artifact.File] = fmt.Sprintf("artifact %q", key)
+	}
 	for _, key := range keys {
 		indexSlice := index.Slices[key]
 		if indexSlice == nil {
@@ -418,13 +491,52 @@ func (index *Index) validate() error {
 		if err := validateIndexSlice(key, parsed[key], indexSlice); err != nil {
 			return err
 		}
-		if owner, found := declaredFiles[indexSlice.File]; found {
-			return fetchErrorf(
-				"index slices %q and %q both declare file %q; one archive cannot be two slices",
-				owner, key, indexSlice.File,
-			)
+		previous := ""
+		for _, artifactKey := range indexSlice.Artifacts {
+			if artifactKey <= previous {
+				return fetchErrorf("index slice %q: artifacts must be unique and sorted", key)
+			}
+			artifactID, err := ParseSliceID(artifactKey)
+			if err != nil || artifactID.IsCore() || artifactID.Architecture != "" {
+				return fetchErrorf("index slice %q: invalid artifact dependency %q", key, artifactKey)
+			}
+			if _, found := index.Artifacts[artifactKey]; !found {
+				return fetchErrorf("index slice %q references artifact %q, which the index does not publish", key, artifactKey)
+			}
+			if parsed[key].Architecture == "" || parsed[key].Platform != artifactID.Platform {
+				return fetchErrorf("index slice %q cannot depend on shared artifact %q; only architecture slices of that platform may reference it", key, artifactKey)
+			}
+			artifactReferences[artifactKey]++
+			previous = artifactKey
 		}
-		declaredFiles[indexSlice.File] = key
+		if owner, found := declaredFiles[indexSlice.File]; found {
+			return fetchErrorf("index archives %s and slice %q both declare file %q; one archive name identifies one artifact", owner, key, indexSlice.File)
+		}
+		declaredFiles[indexSlice.File] = fmt.Sprintf("slice %q", key)
+	}
+	for _, key := range sortedKeys(index.Artifacts) {
+		if artifactReferences[key] < 2 {
+			return fetchErrorf("index artifact %q is referenced by %d slices; a shared artifact must serve at least two architecture slices", key, artifactReferences[key])
+		}
+		for _, sliceKey := range keys {
+			id := parsed[sliceKey]
+			if id.Platform == key && id.Architecture != "" && !slices.Contains(index.Slices[sliceKey].Artifacts, key) {
+				return fetchErrorf("index artifact %q is shared by its platform, but architecture slice %q does not reference it", key, sliceKey)
+			}
+		}
+	}
+	return nil
+}
+
+func validateIndexArtifact(key string, artifact *IndexArtifact) error {
+	if err := validateArchiveFileName(artifact.File); err != nil {
+		return fetchErrorf("index artifact %q: %s", key, err)
+	}
+	if err := ValidateChecksum(artifact.SHA256); err != nil {
+		return fetchErrorf("index artifact %q: invalid sha256: %s", key, err)
+	}
+	if artifact.Size <= 0 {
+		return fetchErrorf("index artifact %q: size %d must be a positive byte count", key, artifact.Size)
 	}
 	return nil
 }
@@ -712,6 +824,22 @@ func (index *Index) PublishedSliceIDs() []SliceID {
 		set[id] = struct{}{}
 	}
 	return sortedSliceIDs(set)
+}
+
+// RequiredArtifacts returns the sorted, deduplicated shared-artifact closure
+// of the selected slices. Format-1 indexes return an empty set.
+func (index *Index) RequiredArtifacts(selected []SliceID) []string {
+	set := map[string]struct{}{}
+	for _, id := range selected {
+		indexSlice := index.Slices[id.String()]
+		if indexSlice == nil {
+			continue
+		}
+		for _, artifact := range indexSlice.Artifacts {
+			set[artifact] = struct{}{}
+		}
+	}
+	return slices.Sorted(maps.Keys(set))
 }
 
 // Save writes the index to path as TOML through a temp file and a rename, so a

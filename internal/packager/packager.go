@@ -56,6 +56,10 @@ type Result struct {
 	// Slices are the published slices, core first and the rest in ascending
 	// slice-ID order.
 	Slices []SliceResult `json:"slices"`
+
+	// Artifacts are format-2 shared archives, sorted by ID. They are downloaded
+	// only as automatic dependencies of selected slices.
+	Artifacts []ArtifactResult `json:"artifacts,omitempty"`
 }
 
 // SliceResult is one published slice of a packaging run.
@@ -66,13 +70,22 @@ type SliceResult struct {
 	SHA256 string `json:"sha256"`
 }
 
+// ArtifactResult is one non-selectable shared archive produced by a format-2
+// packaging run.
+type ArtifactResult struct {
+	ID     string `json:"id"`
+	File   string `json:"file"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+}
+
 // Package turns one addon subtree into a core archive plus one archive per
 // platform slice, described by a gpm-index.toml.
 //
-// Every published slice is independently complete: installing it alone beside
-// core yields a .gdextension describing every binary that slice ships for its
-// platform. No network access is performed, the addon subtree is only ever read,
-// and nothing is written outside the output directory.
+// A format-1 slice is independently complete beside core. A format-2 slice is
+// independently complete as the closure of core, its own archive, and the
+// shared artifacts it references. No network access is performed, the addon
+// subtree is only ever read, and nothing is written outside the output directory.
 func Package(options Options) (*Result, error) {
 	repositoryRoot, err := filepath.Abs(options.Directory)
 	if err != nil {
@@ -141,7 +154,7 @@ func Package(options Options) (*Result, error) {
 	}
 
 	coreID := slice.CoreSliceID()
-	membership, err := claims.resolve(tree, coreID)
+	membership, artifactMembership, err := claims.resolve(tree, coreID)
 	if err != nil {
 		return nil, err
 	}
@@ -162,12 +175,35 @@ func Package(options Options) (*Result, error) {
 	}
 
 	index := &slice.Index{
-		Format:  slice.SupportedIndexFormat,
+		Format:  1,
 		Name:    config.Package.Name,
 		Version: version,
 		Slices:  map[string]*slice.IndexSlice{},
 	}
 	result := &Result{Name: config.Package.Name, Version: version, Index: indexPath}
+	if len(artifactMembership) > 0 {
+		index.Format = 2
+		index.Artifacts = map[string]*slice.IndexArtifact{}
+		for _, artifactID := range sortedKeys(artifactMembership) {
+			files, err := archiveFilesOf(slice.SliceID{}, coreID, tree, artifactMembership[artifactID], coreBodies)
+			if err != nil {
+				return nil, err
+			}
+			fileName := sharedArchiveFileName(config.Package.Name, version, artifactID)
+			archivePath := filepath.Join(outputDirectory, fileName)
+			if err := writeArchive(archivePath, files); err != nil {
+				return nil, err
+			}
+			checksum, size, err := measureArchive(archivePath)
+			if err != nil {
+				return nil, err
+			}
+			index.Artifacts[artifactID] = &slice.IndexArtifact{File: fileName, SHA256: checksum, Size: size}
+			result.Artifacts = append(result.Artifacts, ArtifactResult{
+				ID: artifactID, File: fileName, Size: size, SHA256: checksum,
+			})
+		}
+	}
 
 	for _, id := range publishedSliceIDs(coreID, membership, published, extras) {
 		files, err := archiveFilesOf(id, coreID, tree, membership[id], coreBodies)
@@ -187,6 +223,11 @@ func Package(options Options) (*Result, error) {
 			return nil, err
 		}
 		indexSlice := &slice.IndexSlice{File: fileName, SHA256: checksum, Size: size}
+		if id.Architecture != "" {
+			if _, shared := artifactMembership[id.Platform]; shared {
+				indexSlice.Artifacts = []string{id.Platform}
+			}
+		}
 		if entries, declared := published[id]; declared {
 			if err := fillIndexSlice(indexSlice, id, entries); err != nil {
 				return nil, err
@@ -620,6 +661,10 @@ func verifyEmittedIndex(path string) error {
 // drift.
 func archiveFileName(name, version string, id slice.SliceID) string {
 	return fmt.Sprintf("%s-%s-%s.zip", name, version, id)
+}
+
+func sharedArchiveFileName(name, version, artifactID string) string {
+	return fmt.Sprintf("%s-%s-shared-%s.zip", name, version, artifactID)
 }
 
 // prepareOutputDirectory resolves --out and creates it.

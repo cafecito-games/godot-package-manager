@@ -39,13 +39,13 @@ func (set *claimSet) add(relativePath string, claim fileClaim) {
 
 // resolve assigns every file of the addon subtree to the slices that carry it.
 //
-// The partition it returns is total and disjoint up to the fan-out: every
-// regular file under the addon root lands in at least one slice, and in exactly
-// one except for a file named by a generic entry of a fanned-out platform, which
-// lands in every architecture slice of that platform. Both halves are asserted
-// here rather than assumed, because an archive set that drops a file or
-// duplicates one across unrelated slices is a release an author would publish
-// without noticing.
+// The partitions it returns are total and disjoint: every regular file under
+// the addon root lands in exactly one slice or one shared artifact. A file named
+// by a generic entry of a fanned-out platform is first proved to belong to all
+// architecture targets, then stored once in that platform's artifact. Both
+// halves are asserted here rather than assumed, because an archive set that
+// drops a file or duplicates one across unrelated slices is a release an author
+// would publish without noticing.
 //
 // A file no claim names belongs to core, which is what makes core "everything
 // platform-independent" without enumerating it.
@@ -53,13 +53,14 @@ func (set *claimSet) add(relativePath string, claim fileClaim) {
 // A .gdextension is never claimed: it is partitioned, and core ships the body
 // that is left. A claim on one means an extras glob or an entry value names a
 // file that is also being rewritten, which is ambiguous rather than additive.
-func (set *claimSet) resolve(tree *addonTree, coreID slice.SliceID) (map[slice.SliceID][]string, error) {
+func (set *claimSet) resolve(tree *addonTree, coreID slice.SliceID) (map[slice.SliceID][]string, map[string][]string, error) {
 	membership := map[slice.SliceID][]string{}
+	artifacts := map[string][]string{}
 	for _, file := range tree.files {
 		claims := set.byPath[file.relativePath]
 		if strings.HasSuffix(file.relativePath, extensionSuffix) {
 			if len(claims) > 0 {
-				return nil, manifestErrorf(
+				return nil, nil, manifestErrorf(
 					"%s is a %s, which is partitioned and always ships in the %q slice, but %s claims it for slice %q",
 					file.relativePath, extensionSuffix, coreID, claims[0].origin, claims[0].id,
 				)
@@ -69,10 +70,18 @@ func (set *claimSet) resolve(tree *addonTree, coreID slice.SliceID) (map[slice.S
 		}
 		carriers, err := carriersOf(file.relativePath, claims)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if len(carriers) == 0 {
 			membership[coreID] = append(membership[coreID], file.relativePath)
+			continue
+		}
+		if len(carriers) > 1 {
+			// carriersOf has proved this is exactly one generic platform's
+			// fan-out. Format 2 stores those bytes once under that platform's
+			// non-selectable artifact and makes every architecture slice depend
+			// on it, instead of copying them into each slice archive.
+			artifacts[carriers[0].Platform] = append(artifacts[carriers[0].Platform], file.relativePath)
 			continue
 		}
 		for _, id := range carriers {
@@ -85,17 +94,18 @@ func (set *claimSet) resolve(tree *addonTree, coreID slice.SliceID) (map[slice.S
 	// root, or one reached through a symlink, out of an archive.
 	for _, relativePath := range sortedKeys(set.byPath) {
 		if _, walked := tree.positions[relativePath]; !walked {
-			return nil, manifestErrorf(
+			return nil, nil, manifestErrorf(
 				"%s is claimed for slice %q but is not a file under the addon root",
 				relativePath, set.byPath[relativePath][0].id,
 			)
 		}
 	}
-	return membership, nil
+	return membership, artifacts, nil
 }
 
-// carriersOf reduces one file's claims to the distinct slices that carry it,
-// applying the fan-out's narrow duplicate exemption.
+// carriersOf reduces one file's claims to its distinct logical architecture
+// owners, applying the fan-out's narrow multi-owner exemption. resolve stores a
+// multi-owner file in their one shared artifact rather than in those slices.
 func carriersOf(relativePath string, claims []fileClaim) ([]slice.SliceID, error) {
 	distinct := map[slice.SliceID][]fileClaim{}
 	for _, claim := range claims {

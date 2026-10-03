@@ -58,7 +58,10 @@ a `slices` array:
 `slices` reports what is **on disk**, not what the addon publishes and not what
 the project declares. Under `--host-only` it lists `core` plus the host's slice;
 under `--all-platforms` it lists every published slice. The field is omitted for
-an unsliced addon.
+an unsliced addon. A format-2 install also reports an `artifacts` array containing
+the non-selectable shared dependencies materialized for those slices whenever
+that selected closure is non-empty; `artifacts` is omitted when no selected
+slice needs one.
 
 ## List
 
@@ -96,9 +99,15 @@ declared set:
 ]
 ```
 
+For format 2, `list` also reads the materialized `artifacts` closure from
+`.gpm-state.toml`. The JSON field is omitted when that closure is empty. Text
+output appends the same IDs as `shared:android,ios` after the slice list.
+
 ## Package
 
-`gpm --json package` reports the slices one packaging run published:
+`gpm --json package` reports the slices one packaging run published. When fan-out
+bytes are shared by several architecture slices, it also reports an `artifacts`
+array with the same `id`, `file`, `size`, and `sha256` shape:
 
 ```json
 {
@@ -113,10 +122,30 @@ declared set:
       "sha256": "e8de5ee7b224e7aa447885ec3c248f04151e111f5bd9f78bdbfc85aa25fbb8c4"
     },
     {
+      "id": "android.arm64",
+      "file": "limboai-1.4.0-android.arm64.zip",
+      "size": 178,
+      "sha256": "3a3441a0f24f45b89d7ee14a7b4ddf4458bbbdf715e652155f8b6695b1d70514"
+    },
+    {
+      "id": "android.x86_64",
+      "file": "limboai-1.4.0-android.x86_64.zip",
+      "size": 182,
+      "sha256": "4a3441a0f24f45b89d7ee14a7b4ddf4458bbbdf715e652155f8b6695b1d70514"
+    },
+    {
       "id": "macos",
       "file": "limboai-1.4.0-macos.zip",
       "size": 194,
       "sha256": "2a3441a0f24f45b89d7ee14a7b4ddf4458bbbdf715e652155f8b6695b1d70514"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "android",
+      "file": "limboai-1.4.0-shared-android.zip",
+      "size": 76000,
+      "sha256": "8ffda2f9a5237ddc7551d0d34db55cf01b79260ad9943166a54d829f57100f7b"
     }
   ]
 }

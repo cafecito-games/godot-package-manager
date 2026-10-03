@@ -199,6 +199,10 @@ List configured addons and whether their install directory exists:
 gpm list
 ```
 
+For sliced addons, text output includes the materialized slice IDs and appends
+format-2 shared dependencies as `shared:android,ios`. JSON reports the same
+machine-local closure; see [JSON output](json-output.md#list).
+
 ## gpm package
 
 Partition an addon repository into [platform slice](slices.md) archives and an
@@ -213,7 +217,7 @@ gpm package --dir path/to/addon-repo --out dist --version 1.4.1
 | Flag | Notes |
 | --- | --- |
 | `--dir` | Addon repository directory holding `gpm-package.toml`. Defaults to the current directory. |
-| `--out` | Directory to write slice archives and `gpm-index.toml` into. Defaults to `dist`, relative to the repository. |
+| `--out` | Directory to write slice archives, any format-2 shared-artifact archives, and `gpm-index.toml` into. Defaults to `dist`, relative to the repository. |
 | `--version` | Version to package, overriding `[package] version`. |
 
 Publishing the resulting artifacts remains the author's job. See [Platform

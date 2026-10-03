@@ -32,9 +32,10 @@ that is not platform-specific — scripts, scenes, resources, and the
 `.gdextension` body with its platform-tagged entries removed.
 
 Each platform slice carries that platform's library binaries, the files shipped
-beside them, and the `.gdextension` entries that name them. Every published
-slice is independently complete: installing one platform slice beside `core`
-yields a `.gdextension` describing every binary that slice ships.
+beside them, and the `.gdextension` entries that name them. In index format 1,
+installing one platform slice beside `core` is complete. Format 2 may additionally
+name non-selectable shared artifacts; there, a slice is independently installable
+as the closure of `core`, that slice, and its automatically downloaded artifacts.
 
 ## Slice IDs
 
@@ -454,7 +455,9 @@ offered both `macos.universal` and `macos` would take `macos.universal` alone an
 lose the editor library. `gpm package` resolves that on the producer side: every
 architecture slice of such a platform receives that platform's generic entries
 in addition to its own, and the platform's generic slice is then not published at
-all. Each published slice stays independently complete.
+all. The shared files those entries name are stored once when at least two
+architecture slices need them; each slice names that archive as an automatic
+dependency and stays independently installable as a dependency closure.
 
 A `[package.slices]` key that names such a platform generically fans out the same
 way. This is how an addon ships a payload that is one file for every
@@ -467,11 +470,11 @@ android = ["bin/android/*.aar"]
 ```
 
 On an addon whose `[libraries]` name `android.arm64`, `android.arm32`,
-`android.x86_64` and `android.x86_32`, those files land in all four slices, no
-generic `android` slice is published, and every slice stays installable on its
-own. Naming the architecture slices individually instead would claim one file for
-four slices, which is refused; naming just one would leave the other three ABIs
-with a complete slice and no plugin.
+`android.x86_64` and `android.x86_32`, those files land once in a shared
+`android` artifact. No generic `android` slice is published; all four architecture
+slices reference the artifact automatically. Naming the architecture slices
+individually instead would claim one file for four slices, which is refused;
+naming just one would leave the other three ABIs with no plugin.
 
 The fan-out only applies where the addon's own `.gdextension` names at least one
 architecture for the platform. When it names none, nothing says which
@@ -486,11 +489,11 @@ installed on a host that resolves to an architecture, and the extras naming
 "android" must name those architecture slices instead
 ```
 
-Because a fanned-out file is published in several archives, a project that
-selects more than one architecture of that platform — one declaring both Android
-ABIs, or any `gpm install --all-platforms` — extracts it more than once. `gpm`
-accepts the repeat when the two slices are architecture slices of one platform
-and the bytes agree, and reports the release otherwise.
+The shared artifact is downloaded and extracted once even when a project selects
+several architectures of its platform. A fan-out with only one target needs no
+shared archive and remains format 1. `gpm package` emits format 2 only when at
+least two architecture slices actually share bytes, preserving compatibility for
+ordinary packages.
 
 ### gpm package
 
@@ -511,13 +514,21 @@ Packaged limboai 1.4.0 into 6 slices
 Index: /path/to/addon-repo/dist/gpm-index.toml
 ```
 
-Archives are named `<name>-<version>-<slice>.zip` and are reproducible: entries
-are sorted, timestamps are fixed, and file modes are normalized, so two runs over
-an unchanged tree write identical bytes. `gpm package` performs no network
-access, only ever reads the addon subtree, and writes nothing outside the output
-directory.
+Slice archives are named `<name>-<version>-<slice>.zip`. A format-2 shared
+artifact is named `<name>-<version>-shared-<platform>.zip` and appears after the
+slice list in text output:
 
-Publishing the artifacts remains the author's job:
+```text
+  shared:android   limboai-1.4.0-shared-android.zip  76000 bytes
+```
+
+Both archive kinds are reproducible: entries are sorted, timestamps are fixed,
+and file modes are normalized, so two runs over an unchanged tree write
+identical bytes. `gpm package` performs no network access, only ever reads the
+addon subtree, and writes nothing outside the output directory.
+
+Publishing every slice archive, shared-artifact archive, and the index beside
+one another remains the author's job:
 
 ```bash
 gpm package --version 1.4.0
@@ -576,6 +587,7 @@ Top-level keys:
 | `format` | Index format version. Mandatory and not defaulted. |
 | `name` | The addon's published directory name. |
 | `version` | The version these slices were cut from. |
+| `[artifacts]` | Format 2 only. Non-selectable shared archives, keyed by generic platform name. |
 | `[slices]` | One table per published slice, keyed by slice ID. At least `core`. |
 
 Each slice table:
@@ -585,11 +597,34 @@ Each slice table:
 | `file` | The archive's bare asset name. No path separators, no colon. |
 | `sha256` | The archive's SHA-256 as 64 lowercase hex digits. |
 | `size` | The archive's size in bytes, a positive integer. |
+| `artifacts` | Format 2 only. Sorted shared-artifact IDs downloaded automatically with this slice. |
 | `[libraries]` | Partitioned `[libraries]` entries, by `.gdextension` path then platform tag. |
 | `[dependencies]` | Partitioned `[dependencies]` entries, by `.gdextension` path then platform tag. |
 
-`[libraries]` and `[dependencies]` are the only partitioned sections in format
-1, and they are the only two that differ in their leaf:
+A minimal format-2 fragment looks like this:
+
+```toml
+format = 2
+name = "sentry"
+version = "2.3.0"
+
+[artifacts.android]
+file = "sentry-2.3.0-shared-android.zip"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+size = 76000
+
+[slices."android.arm64"]
+file = "sentry-2.3.0-android.arm64.zip"
+sha256 = "1111111111111111111111111111111111111111111111111111111111111111"
+size = 42000
+artifacts = ["android"]
+```
+
+Every other architecture slice sharing those bytes repeats
+`artifacts = ["android"]`; it does not repeat the bytes.
+
+`[libraries]` and `[dependencies]` are the only partitioned sections in formats
+1 and 2, and they are the only two that differ in their leaf:
 
 - A `[libraries]` entry is **one quoted `res://` path**, naming that platform's
   library binary.
@@ -606,23 +641,46 @@ The `core` slice may not declare either section: platform-tagged entries belong
 to platform slices, and `core` carries none. A section that is declared but empty
 is also rejected — an absent section is omitted instead.
 
+An artifact table has the same `file`, `sha256`, and `size` fields as a slice,
+but no platform entries. Its key is a generic platform name such as `android`.
+It must be referenced by at least two architecture slices of that same platform,
+and every published architecture slice of that platform must list it in its
+`artifacts` array. Artifacts cannot be declared in `addons.toml` or selected on
+their own.
+
+A malformed dependency graph is rejected while the index loads, with exit code
+4. For example:
+
+```text
+gpm: index format 2 declares no [artifacts]; format 2 is used only when slices share an archive
+gpm: index artifact "android" is shared by its platform, but architecture slice "android.x86_64" does not reference it
+```
+
+Artifact dependency lists must also be unique and sorted, must name a published
+artifact, and may appear only on architecture slices of that artifact's
+platform. These are publisher errors; the project cannot repair them locally.
+
 An archive is resolved by joining `file` to the directory the index was
 downloaded from, so the index and its archives are published side by side. Two
-slices may not declare the same `file`.
+slices or artifacts may not declare the same `file`.
 
 #### The format Rule
 
-`format` is read and validated **before any other key is interpreted**. An index
-declaring a `format` higher than this `gpm` supports is rejected outright rather
-than interpreted in part, because a future format may give an existing key a new
-meaning:
+`format` is read and validated **before any other key is interpreted**. Format 1
+has only slices. Format 2 adds `[artifacts]` and per-slice `artifacts` dependency
+lists and requires at least one artifact. Format 1 rejects both of those
+format-2 keys. An index declaring a `format` higher than this `gpm` supports is
+rejected outright rather than interpreted in part, because a future format may
+give an existing key a new meaning:
 
 ```text
 $ gpm install
-gpm: unsupported index format 2: this gpm understands index format 1 at most, so upgrade gpm to install this addon
+gpm: unsupported index format 3: this gpm understands index format 2 at most, so upgrade gpm to install this addon
 ```
 
-That failure is exit code 4. An index that declares no `format` at all is also
+That failure is exit code 4. A format-1 gpm likewise rejects a format-2 package
+with the same upgrade diagnosis; it never silently ignores shared dependencies.
+An index that declares no `format` at all is also
 rejected: a producer that forgot it is a bug, and guessing format 1 would hide it.
 
 #### Unknown Keys Are Rejected
@@ -642,10 +700,10 @@ Every byte of a sliced addon is verified against a pin:
 - The index itself is pinned by `index_sha256` in `addons.lock`, computed over
   the raw `gpm-index.toml` bytes before parsing, so a change that only alters
   how the index parses cannot evade it.
-- Each slice archive is pinned twice: by the `sha256` and `size` the index
-  declares, and by the `slices` table in `addons.lock`.
-- The lock's published set is compared as a set, so a retagged release that adds
-  or drops a slice fails rather than installing quietly.
+- Each slice and shared-artifact archive is pinned by the `sha256` and `size` the
+  index declares and by its matching table in `addons.lock`.
+- The lock's published sets are compared as sets, so a retagged release that
+  adds or drops a slice or shared artifact fails rather than installing quietly.
 
 A mismatch is exit code 4 and installs nothing:
 
@@ -653,6 +711,10 @@ A mismatch is exit code 4 and installs nothing:
 $ gpm install
 gpm: addon "limboai": slice "macos" checksum mismatch (lock: 0000000af24f45b89d7ee14a7b4ddf4458bbbdf715e652155f8b6695b1d70514, fetched: 2a3441a0f24f45b89d7ee14a7b4ddf4458bbbdf715e652155f8b6695b1d70514)
 ```
+
+`--max-download-size` continues to cap each downloaded archive individually,
+including each shared artifact. `--max-extract-size` caps the combined merged
+tree across core, selected slices, and their artifact closure.
 
 The slice pins are verified independently of the selection mode: the whole
 published set is checked even when only `core` and the host slice were
@@ -662,13 +724,14 @@ what this disk took.
 A sliced addon has no single archive, so `checksum` in `addons.toml` has nothing
 to pin and is rejected for a sliced addon rather than left to go inert.
 
-Two slices may not ship the same path into the merged tree. The comparison is
+Two archives may not ship the same path into the merged tree. The comparison is
 case-folded, because on a case-insensitive filesystem two differently-cased paths
 are one file:
 
 ```text
 $ gpm install
 gpm: slices "core" and "linux" both ship "shared.txt"; one path in the merged tree cannot come from two slices
+gpm: artifact "android" and slice "android.arm64" both ship "plugin.aar"; one path in the merged tree cannot come from two archives
 ```
 
 That failure is exit code 4.

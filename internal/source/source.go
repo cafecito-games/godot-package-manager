@@ -32,16 +32,33 @@ type FetchResult struct {
 	// from it machine-independent.
 	PublishedSlices []SliceResult
 
+	// PublishedArtifacts is the complete format-2 shared-artifact set, whether
+	// or not this selection needed each artifact. Locks are built from this
+	// machine-independent set.
+	PublishedArtifacts []ArtifactResult
+
 	// InstalledSlices is the subset actually downloaded, verified, and merged
 	// into Dir, sorted by slice ID. It is what this machine has materialized,
 	// as opposed to what the addon publishes.
 	InstalledSlices []slice.SliceID
+
+	// InstalledArtifacts is the automatic dependency closure materialized for
+	// InstalledSlices, sorted by artifact ID.
+	InstalledArtifacts []string
 
 	// Diagnostics are notes about the fetch that are not failures: a host the
 	// addon publishes no slice for, or a manifest field the sliced path ignores.
 	// They travel on FetchResult because it is the only channel by which a fetch
 	// outcome reaches the caller, and a Fetcher writes to no stream of its own.
 	Diagnostics []string
+}
+
+// ArtifactResult records one non-selectable shared archive from a format-2
+// index.
+type ArtifactResult struct {
+	ID       string
+	Checksum string
+	Size     int64
 }
 
 // Fetcher retrieves an addon source into a local temporary directory.

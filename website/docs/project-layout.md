@@ -33,8 +33,9 @@ committing it would publish one machine's layout to the whole team.
 [addons]
   [addons.limboai]
     resolved_version = "1.4.0"
-    slices = ["core", "linux.x86_64", "macos", "windows.x86_64"]
-    pin = "4a79717d9d4b2573188bb7396e10b37e5e5852531302542d3741dd00c67ff217"
+    slices = ["android.arm64", "core", "linux.x86_64", "macos", "windows.x86_64"]
+    artifacts = ["android"]
+    pin = "format2:4a79717d9d4b2573188bb7396e10b37e5e5852531302542d3741dd00c67ff217"
     file_manifest_version = 1
     files = ["plugin.cfg", "scripts/limbo_state.gd"]
 ```
@@ -43,14 +44,18 @@ committing it would publish one machine's layout to the whole team.
 | --- | --- |
 | `resolved_version` | The version these slices came from. |
 | `slices` | The slice IDs present in `addons/` on this disk. |
+| `artifacts` | Format-2 shared artifact IDs materialized as automatic dependencies on this disk. |
 | `pin` | The lockfile pin these slices were materialized from. |
 | `file_manifest_version` | The completeness-check schema used for this install. |
 | `files` | Relative paths that must still be regular files under the installed addon. |
 
-`pin` is a sliced addon's `index_sha256` or an unsliced addon's archive
-checksum, and it is empty for a `git` source, whose resolved commit SHA is
-already its content identity. It is recorded because a resolved version does not
-identify content: a release keeps its tag when it is republished, so two branches
+`pin` is a format-1 sliced addon's `index_sha256`, a format-2 addon's
+`format2:<index_sha256>`, or an unsliced addon's archive checksum. It is empty
+for a `git` source, whose resolved commit SHA is already its content identity.
+The format-2 marker lets a current client recover if an older client rewrites
+the lock and state without fields it did not understand. The pin is recorded
+because a resolved version does not identify content: a release keeps its tag
+when it is republished, so two branches
 of one repository can share an `addons.toml` — and therefore a `spec_hash` and a
 resolved version — while their committed `addons.lock` files pin different bytes.
 Comparing the pin is what stops a state entry written against one lock from
@@ -71,7 +76,7 @@ State entries written by older gpm versions have no file manifest. The first
 the manifest; later intact installs use the normal no-fetch fast path.
 
 `.gpm-state.toml` is never authoritative over `addons.lock`. It answers which
-slice IDs this machine materialized and whether required file paths remain
+slice and shared-artifact IDs this machine materialized and whether required file paths remain
 present, never whether their bytes are correct, so discarding it costs a
 re-download and nothing more. An unparseable state file is reported and treated
 as empty rather than failing the run.

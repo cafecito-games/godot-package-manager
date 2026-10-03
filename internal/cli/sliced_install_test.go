@@ -621,6 +621,77 @@ func TestSlicedLockRecordsTheWholePublishedSet(t *testing.T) {
 		"while only core and the host slice are on this disk")
 }
 
+func TestFormat2InstallLocksAllArtifactsAndRecordsTheSelectedClosure(t *testing.T) {
+	withEnvironment(t, nil)
+	withHost(t, unpublishedHost)
+	publisher := servePublisher(t, packSharedArtifactFixture(t))
+	projectRoot := newSlicedProject(t, publisher, "android.arm64")
+
+	stdout := &bytes.Buffer{}
+	require.NoError(t, executeGPM(t, stdout, io.Discard, "install", "--json", "--dir", projectRoot))
+	require.FileExists(t, filepath.Join(projectRoot, "addons", slicedAddonName, "bin", "android", "plugin.aar"))
+	require.FileExists(t, filepath.Join(projectRoot, "addons", slicedAddonName, "bin", "android", "addon.arm64.so"))
+	require.NoFileExists(t, filepath.Join(projectRoot, "addons", slicedAddonName, "bin", "android", "addon.arm32.so"))
+
+	lock, err := manifest.LoadLock(filepath.Join(projectRoot, "addons.lock"))
+	require.NoError(t, err)
+	entry := lock.Addons[slicedAddonName]
+	require.Equal(t, map[string]string{"android": entry.Artifacts["android"]}, entry.Artifacts)
+
+	state, err := manifest.LoadState(filepath.Join(projectRoot, project.StateFileName))
+	require.NoError(t, err)
+	require.Equal(t, []string{"android"}, state.Addons[slicedAddonName].Artifacts)
+	require.Equal(t, []string{"android.arm64", "core"}, state.Addons[slicedAddonName].Slices)
+
+	var results []AddonResult
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &results))
+	require.Equal(t, []string{"android"}, results[0].Artifacts)
+
+	requests := publisher.requestCount()
+	require.NoError(t, executeGPM(t, io.Discard, io.Discard, "install", "--dir", projectRoot))
+	require.Equal(t, requests, publisher.requestCount(), "the lock and state closure must satisfy a repeat install")
+}
+
+func TestFormat2InstallRestoresArtifactPinsDroppedByAnOlderClient(t *testing.T) {
+	withEnvironment(t, nil)
+	withHost(t, unpublishedHost)
+	publisher := servePublisher(t, packSharedArtifactFixture(t))
+	projectRoot := newSlicedProject(t, publisher, "android.arm64")
+
+	require.NoError(t, executeGPM(t, io.Discard, io.Discard, "install", "--dir", projectRoot))
+	lockPath := filepath.Join(projectRoot, "addons.lock")
+	lock, err := manifest.LoadLock(lockPath)
+	require.NoError(t, err)
+	entry := lock.Addons[slicedAddonName]
+	require.NotEmpty(t, entry.Artifacts)
+	entry.Artifacts = nil
+	lock.Addons[slicedAddonName] = entry
+	require.NoError(t, lock.Save(lockPath))
+	statePath := filepath.Join(projectRoot, project.StateFileName)
+	state, err := manifest.LoadState(statePath)
+	require.NoError(t, err)
+	stateEntry := state.Addons[slicedAddonName]
+	require.Contains(t, stateEntry.Pin, "format2:")
+	stateEntry.Artifacts = nil
+	state.Addons[slicedAddonName] = stateEntry
+	require.NoError(t, state.Save(statePath))
+
+	requests := publisher.requestCount()
+	stderr := &bytes.Buffer{}
+	require.NoError(t, executeGPM(t, io.Discard, stderr,
+		"install", "--verbose", "--dir", projectRoot))
+	require.Greater(t, publisher.requestCount(), requests,
+		"the missing artifact set must be recovered from the pinned index")
+	require.Contains(t, stderr.String(), "restoring them from pinned "+slice.IndexFileName)
+
+	repaired, err := manifest.LoadLock(lockPath)
+	require.NoError(t, err)
+	require.Contains(t, repaired.Addons[slicedAddonName].Artifacts, "android")
+	state, err = manifest.LoadState(statePath)
+	require.NoError(t, err)
+	require.Equal(t, []string{"android"}, state.Addons[slicedAddonName].Artifacts)
+}
+
 // TestSlicedInstallDoesNotTrustStateAcrossALockPinChange is the branch-switch
 // case. Two branches of one repository can share an addons.toml — and therefore
 // a spec_hash and a resolved version — while their committed addons.lock files

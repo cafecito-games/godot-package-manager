@@ -79,6 +79,73 @@ func TestLockRoundTripSlicedEntry(t *testing.T) {
 	require.Equal(t, lockfile.Addons, got.Addons)
 }
 
+func TestLockRoundTripFormat2SharedArtifacts(t *testing.T) {
+	entry := format2Entry()
+	lockfile := &Lockfile{Addons: map[string]LockEntry{"sentry": entry}}
+	path := filepath.Join(t.TempDir(), "addons.lock")
+	require.NoError(t, lockfile.Save(path))
+
+	got, err := LoadLock(path)
+	require.NoError(t, err)
+	require.Equal(t, lockfile.Addons, got.Addons)
+}
+
+func format2Entry() LockEntry {
+	entry := slicedEntry()
+	entry.Slices["android.arm32"] = iosDigest
+	entry.Slices["android.arm64"] = windowsDigest
+	entry.Artifacts = map[string]string{"android": archiveDigest}
+	return entry
+}
+
+func TestLockfileValidateRejectsInvalidArtifacts(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*LockEntry)
+		wantErr string
+	}{
+		{
+			name: "architecture-qualified artifact key",
+			mutate: func(entry *LockEntry) {
+				entry.Artifacts = map[string]string{"android.arm64": archiveDigest}
+			},
+			wantErr: `invalid artifacts key "android.arm64"`,
+		},
+		{
+			name: "invalid artifact checksum",
+			mutate: func(entry *LockEntry) {
+				entry.Artifacts["android"] = "deadbeef"
+			},
+			wantErr: `invalid checksum for artifact "android"`,
+		},
+		{
+			name: "artifact with one architecture slice",
+			mutate: func(entry *LockEntry) {
+				delete(entry.Slices, "android.arm32")
+			},
+			wantErr: `artifact "android" has 1 architecture slices`,
+		},
+		{
+			name: "artifacts without slices or index checksum",
+			mutate: func(entry *LockEntry) {
+				entry.Slices = nil
+				entry.IndexChecksum = ""
+			},
+			wantErr: "slices requires index_sha256",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			entry := format2Entry()
+			test.mutate(&entry)
+			err := (&Lockfile{Addons: map[string]LockEntry{"sentry": entry}}).Validate()
+			require.ErrorContains(t, err, test.wantErr)
+			require.Equal(t, output.ExitManifest, output.CodeFor(err))
+		})
+	}
+}
+
 func TestLockRoundTripUnslicedEntryOmitsSliceKeys(t *testing.T) {
 	lockfile := &Lockfile{Addons: map[string]LockEntry{"dialogue_manager": {
 		ResolvedVersion: "v2.44.0",

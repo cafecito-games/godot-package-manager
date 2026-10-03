@@ -26,6 +26,12 @@ type LockEntry struct {
 	// same table. An unsliced addon leaves this nil and uses Checksum.
 	Slices map[string]string `toml:"slices,omitempty"`
 
+	// Artifacts pins every non-selectable shared archive a format-2 index
+	// publishes. Artifact IDs are generic platform names, so reconciliation can
+	// derive a selected architecture slice's dependency without fetching the
+	// already-pinned index.
+	Artifacts map[string]string `toml:"artifacts,omitempty"`
+
 	// IndexChecksum is the SHA-256 of the raw gpm-index.toml bytes the
 	// Slices table was read from, so a retagged release cannot silently
 	// repoint slice archives. It is set exactly when Slices is set.
@@ -83,7 +89,7 @@ func (lockfile *Lockfile) Validate() error {
 // validateLockEntry checks one lock entry. An addon is either sliced (slices
 // plus index_sha256) or unsliced (checksum), never both.
 func validateLockEntry(name string, entry LockEntry) error {
-	if entry.Slices == nil && entry.IndexChecksum == "" {
+	if entry.Slices == nil && entry.Artifacts == nil && entry.IndexChecksum == "" {
 		return nil
 	}
 	if entry.Checksum != "" {
@@ -107,6 +113,25 @@ func validateLockEntry(name string, entry LockEntry) error {
 		}
 		if err := validateChecksum(checksum); err != nil {
 			return fmt.Errorf("addon %q: invalid checksum for slice %q: %w", name, sliceID, err)
+		}
+	}
+	for artifactID, checksum := range entry.Artifacts {
+		id, err := slice.ParseSliceID(artifactID)
+		if err != nil || id.IsCore() || id.Architecture != "" {
+			return fmt.Errorf("addon %q: invalid artifacts key %q: must be one generic platform name", name, artifactID)
+		}
+		if err := validateChecksum(checksum); err != nil {
+			return fmt.Errorf("addon %q: invalid checksum for artifact %q: %w", name, artifactID, err)
+		}
+		architectureCount := 0
+		for sliceID := range entry.Slices {
+			published, parseErr := slice.ParseSliceID(sliceID)
+			if parseErr == nil && published.Platform == artifactID && published.Architecture != "" {
+				architectureCount++
+			}
+		}
+		if architectureCount < 2 {
+			return fmt.Errorf("addon %q: artifact %q has %d architecture slices; a shared artifact requires at least two", name, artifactID, architectureCount)
 		}
 	}
 	return nil

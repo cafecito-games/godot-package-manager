@@ -17,10 +17,21 @@ Each entry contains:
 | `checksum` | SHA-256 for archive and GitHub release downloads. |
 | `spec_hash` | Hash of the manifest fields that affect resolution. |
 | `slices` | Every slice ID the addon's index publishes, mapped to that slice archive's SHA-256. Set only for a sliced addon. |
+| `artifacts` | Every format-2 shared artifact, mapped to that artifact archive's SHA-256. Set only for format 2; requires `slices` and `index_sha256`, and is omitted otherwise. |
 | `index_sha256` | SHA-256 of the raw `gpm-index.toml` bytes the `slices` table was read from. Set exactly when `slices` is set. |
 
 An addon is either sliced or it is not: `checksum` and `slices` are never both
 set, and a `slices` table must record the `core` slice.
+
+Every `artifacts` key must be one generic platform name, such as `android`, and
+the `slices` table must pin at least two architecture slices of that platform.
+A hand-edited or merge-resolved lock that breaks either rule fails at load with
+exit code 3, for example:
+
+```text
+gpm: addon "sentry": invalid artifacts key "android.arm64": must be one generic platform name
+gpm: addon "sentry": artifact "android" has 1 architecture slices; a shared artifact requires at least two
+```
 
 ## Sliced Addons
 
@@ -49,10 +60,32 @@ project under `--all-platforms` or `--host-only`: the lock is byte-identical in
 all three selection modes. Which slices a particular machine actually
 materialized is a separate question, answered by `.gpm-state.toml`.
 
+For a format-2 index, `artifacts` pins the complete published shared-artifact set
+on every machine. An artifact ID is its generic platform name, so a selected
+architecture slice of that platform pulls it in automatically. The selected
+closure on one disk remains a `.gpm-state.toml` concern.
+
+Upgrade every collaborator to a gpm release that supports index format 2 before
+committing a lock with `artifacts`. Older gpm releases still reject a format-2
+index when they fetch it, but their lockfile reader predates this table and may
+drop these pins if it rewrites the shared lock without fetching. A current gpm
+detects that legacy shape from machine-local state, verifies the pinned index,
+restores the complete artifact set, and rewrites the lock; the upgrade-first
+rule avoids that churn.
+
+A missing `artifacts` table is the older-gpm shape and is repaired this way. An
+explicit but empty `[addons.<name>.artifacts]` table is not a legacy shape: it
+fails verification instead of being treated as a valid format-2 pin set.
+
+```toml
+[addons.sentry.artifacts]
+  android = "8ffda2f9a5237ddc7551d0d34db55cf01b79260ad9943166a54d829f57100f7b"
+```
+
 `index_sha256` pins the index document itself, so a retagged release cannot
 silently repoint the slice archives. On a locked install the fetched index digest,
-the published slice set, and every slice checksum are all compared against the
-lock, whatever the selection mode.
+the published slice and artifact sets, and every archive checksum are all
+compared against the lock, whatever the selection mode.
 
 `addons.lock` is the only verification authority. `.gpm-state.toml` records what
 is on disk and never vouches for its contents.

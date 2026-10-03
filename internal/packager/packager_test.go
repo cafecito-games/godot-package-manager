@@ -138,7 +138,7 @@ version    = "1.2.3"
 	require.Equal(t, "1.2.3", result.Version)
 
 	index := loadEmittedIndex(t, result.Index)
-	require.Equal(t, slice.SupportedIndexFormat, index.Format)
+	require.Equal(t, 1, index.Format, "ordinary packages preserve format-1 compatibility")
 	require.Equal(t, []string{"core", "ios.arm64", "linux.x86_64", "windows.x86_64"}, sliceIDs(index))
 
 	outputDirectory := filepath.Join(root, "dist")
