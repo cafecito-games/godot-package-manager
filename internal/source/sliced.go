@@ -235,16 +235,36 @@ func (f *slicedFetcher) mergeSlice(
 			"slice %q: size mismatch (index: %d bytes, downloaded: %d bytes)",
 			id, indexSlice.Size, info.Size())
 	}
-	return extractArchiveInto(indexSlice.File, archivePath, staging, guard, func(relative string) error {
-		claimed := extractedPath{id: id, spelling: relative}
-		key := mergeClaimKey(relative)
-		owner, taken := owners[key]
-		if !taken {
-			owners[key] = claimed
-			return nil
-		}
-		return collisionError(owner, claimed)
-	})
+	return extractArchiveInto(indexSlice.File, archivePath, staging, guard,
+		func(relative string) (extractDisposition, error) {
+			claimed := extractedPath{id: id, spelling: relative}
+			key := mergeClaimKey(relative)
+			owner, taken := owners[key]
+			if !taken {
+				owners[key] = claimed
+				return extractDisposition{}, nil
+			}
+			// Two slices shipping one path is how `gpm package` fans a platform's
+			// generic payload across the architecture slices of that platform, so
+			// that each one installs on its own. A project selecting two of those
+			// architectures — one declaring both Android ABIs, or any project run
+			// with --all-platforms — therefore legitimately extracts the shared
+			// file twice.
+			//
+			// Only that shape is accepted, which is exactly the duplication the
+			// packager's own claim rule permits: two architecture slices of one
+			// platform, under one spelling. Two unrelated slices sharing a path
+			// stay a collision even when the bytes agree, because nothing about
+			// such a release says the duplication was meant; so do two
+			// differently-cased spellings, which are one file only on some hosts.
+			if !sharedByFanOut(owner.id, id) || owner.spelling != relative {
+				return extractDisposition{}, collisionError(owner, claimed)
+			}
+			return extractDisposition{
+				shared:   true,
+				mismatch: func() error { return divergentSharedPathError(owner, claimed) },
+			}, nil
+		})
 }
 
 // extractedPath records which slice shipped one path in the merged tree, and the
@@ -289,6 +309,38 @@ func collisionError(owner, claimed extractedPath) error {
 			"slices %q and %q ship %q and %q, which are one file on a case-insensitive filesystem; %s",
 			first.id, second.id, first.spelling, second.spelling, remedy)
 	}
+}
+
+// sharedByFanOut reports whether two slices are ones `gpm package` fans a
+// platform's generic payload across: distinct architecture slices of one
+// platform.
+//
+// A generic slice is never published beside the architecture slices of its
+// platform — the packager suppresses it precisely so a host's first match is a
+// complete slice — so a fanned-out copy is only ever held by architecture
+// slices, and this is the full set of pairs that may share a path.
+func sharedByFanOut(owner, claimed slice.SliceID) bool {
+	return owner != claimed &&
+		owner.Platform == claimed.Platform &&
+		owner.Architecture != "" && claimed.Architecture != ""
+}
+
+// divergentSharedPathError reports two slices shipping one path with different
+// contents, which is the case the merge cannot resolve: either slice may be
+// selected alone, so neither copy is the authoritative one, and installing
+// whichever was extracted first would make the merged tree depend on slice
+// order.
+//
+// It is named in slice-ID order for the same reason collisionError is: one pair
+// reports one message however the slices were merged.
+func divergentSharedPathError(owner, claimed extractedPath) error {
+	first, second := owner, claimed
+	if second.id.String() < first.id.String() {
+		first, second = second, first
+	}
+	return fetchErrorf(
+		"slices %q and %q both ship %q with different contents; a path shared by two slices must be the same file in both",
+		first.id, second.id, first.spelling)
 }
 
 // reassembleExtensions rewrites every partitioned .gdextension in the merged

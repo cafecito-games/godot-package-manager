@@ -53,15 +53,29 @@ type fanOutPlan struct {
 // PartitionExtension, so no platform tag is re-parsed here. declared are the
 // slice IDs [package.slices] names.
 //
-// Whether a platform fans out is decided by its partitioned entries alone: only
-// a .gdextension that writes both an architecture-less and an
-// architecture-specific key for one platform says that the platform's generic
-// entries belong to the architectures beside them. But once a platform does fan
-// out, every architecture slice the addon publishes for it is a target,
-// including one that exists only because [package.slices] ships extras for it.
-// A host picks the first published slice of its platform, so an architecture
-// slice left out of the fan-out would be installed instead of a complete one and
-// would carry no library at all.
+// Whether a platform fans out is decided by the architecture slices its
+// .gdextension files partitioned into: only an architecture-specific key says
+// which architectures a platform actually publishes, and so which slices a
+// generic payload of that platform belongs in. A platform whose .gdextension
+// names no architecture is left to rejectGenericSliceBesideItsArchitectures,
+// because nothing says which architectures its generic binaries are for and
+// inventing an answer would drop every other host of that platform.
+//
+// What is generic about such a platform can come from either side. A
+// .gdextension writes both an architecture-less and an architecture-specific key
+// for one platform — godot_jolt's macos.editor beside
+// macos.template_release.universal. A [package.slices] key names the platform
+// generically, which is how an author ships a payload that is one file for every
+// architecture and that no entry key references: the Android plugin .aar. Both
+// mean the same thing, so both fan out the same way, and neither leaves the
+// author with a generic slice that would be published beside the architecture
+// slices and never installed.
+//
+// Once a platform does fan out, every architecture slice the addon publishes for
+// it is a target, including one that exists only because [package.slices] ships
+// extras for it. A host picks the first published slice of its platform, so an
+// architecture slice left out of the fan-out would be installed instead of a
+// complete one and would carry no library at all.
 func newFanOutPlan(partitioned, declared []slice.SliceID) fanOutPlan {
 	architectures := map[string][]slice.SliceID{}
 	generic := map[string]bool{}
@@ -75,11 +89,15 @@ func newFanOutPlan(partitioned, declared []slice.SliceID) fanOutPlan {
 		}
 		architectures[id.Platform] = append(architectures[id.Platform], id)
 	}
-	// Declared slices widen the target set but never create a fan-out: a platform
-	// whose .gdextension names no architecture is left to
-	// rejectGenericSliceBesideItsArchitectures, because nothing says which
-	// architectures its generic binaries are for and inventing an answer would
-	// drop every other host of that platform.
+	// Declared generic keys are read before declared architectures, so a platform
+	// made generic by extras alone still widens its target set to the
+	// architectures extras declare for it. Both loops only ever consider a
+	// platform the partition already gave an architecture slice.
+	for _, id := range declared {
+		if id.Architecture == "" && len(architectures[id.Platform]) > 0 {
+			generic[id.Platform] = true
+		}
+	}
 	for _, id := range declared {
 		if id.Architecture == "" || !generic[id.Platform] || len(architectures[id.Platform]) == 0 {
 			continue

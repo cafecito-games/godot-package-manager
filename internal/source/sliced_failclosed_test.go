@@ -601,3 +601,55 @@ func requireManifestChecksumRejection(t *testing.T, err error, temporaryRoot str
 	// rejected before any slice is fetched, not after.
 	requireTemporaryRootEmpty(t, temporaryRoot)
 }
+
+// TestSlicedFetchRejectsTwoArchitectureSlicesDisagreeingAboutASharedPath covers
+// the one duplication the merge accepts, gone wrong. Two architecture slices of
+// one platform may share a path, because that is what the fan-out produces, but
+// either may be selected alone, so there is no authoritative copy when their
+// contents differ.
+func TestSlicedFetchRejectsTwoArchitectureSlicesDisagreeingAboutASharedPath(t *testing.T) {
+	fixture := craftFixture(t, map[string]craftedSlice{
+		"core":            {files: map[string]string{"plugin.cfg": "[plugin]"}},
+		"macos.arm64":     {files: map[string]string{"bin/shared.so": "from arm64"}},
+		"macos.universal": {files: map[string]string{"bin/shared.so": "from universal"}},
+	})
+	server := fixture.serveRelease(t)
+
+	selected := []slice.SliceID{
+		slice.CoreSliceID(),
+		{Platform: "macos", Architecture: "arm64"},
+		{Platform: "macos", Architecture: "universal"},
+	}
+	fetcher := &slicedFetcher{resolve: releaseSliceResolver(releaseAssetsOf(fixture, server.URL), nil)}
+	err := fetcher.mergeSlices(context.Background(), fixture.index, selected, t.TempDir())
+
+	var fetchError *output.FetchError
+	require.ErrorAs(t, err, &fetchError)
+	require.Equal(t, output.ExitFetch, output.CodeFor(err))
+	require.Contains(t, err.Error(), "bin/shared.so")
+	require.Contains(t, err.Error(), "with different contents")
+}
+
+// TestSlicedFetchRejectsUnrelatedSlicesSharingAnIdenticalPath keeps the
+// fan-out's exemption as narrow as the packager's own claim rule. Identical
+// bytes are not what makes a shared path legitimate; being two architecture
+// slices of one platform is, and these are two different platforms.
+func TestSlicedFetchRejectsUnrelatedSlicesSharingAnIdenticalPath(t *testing.T) {
+	fixture := craftFixture(t, map[string]craftedSlice{
+		"core":        {files: map[string]string{"plugin.cfg": "[plugin]"}},
+		"ios.arm64":   {files: map[string]string{"bin/shared.so": "same bytes"}},
+		"macos.arm64": {files: map[string]string{"bin/shared.so": "same bytes"}},
+	})
+	server := fixture.serveRelease(t)
+
+	selected := []slice.SliceID{
+		slice.CoreSliceID(),
+		{Platform: "ios", Architecture: "arm64"},
+		{Platform: "macos", Architecture: "arm64"},
+	}
+	fetcher := &slicedFetcher{resolve: releaseSliceResolver(releaseAssetsOf(fixture, server.URL), nil)}
+	err := fetcher.mergeSlices(context.Background(), fixture.index, selected, t.TempDir())
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot come from two slices")
+}

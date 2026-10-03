@@ -400,6 +400,11 @@ so `core` may not be named — everything unclaimed falls into `core` already.
 Values are globs matched against paths relative to `addon_path`; `**` matches
 across directories. A slice declared with no patterns is an error.
 
+A file belongs to one slice, so two keys may not claim the same path. The one
+exception is a key that names a platform generically while the addon publishes
+architecture slices for it — see
+[Mixed Architecture Granularity](#mixed-architecture-granularity) below.
+
 Decoding is strict in both directions: an unknown key anywhere in
 `gpm-package.toml` is rejected, including one that differs only in case.
 
@@ -445,6 +450,42 @@ lose the editor library. `gpm package` resolves that on the producer side: every
 architecture slice of such a platform receives that platform's generic entries
 in addition to its own, and the platform's generic slice is then not published at
 all. Each published slice stays independently complete.
+
+A `[package.slices]` key that names such a platform generically fans out the same
+way. This is how an addon ships a payload that is one file for every
+architecture: the Android plugin `.aar`, which no `[libraries]` key references
+and which is the same file for every ABI.
+
+```toml
+[package.slices]
+android = ["bin/android/*.aar"]
+```
+
+On an addon whose `[libraries]` name `android.arm64`, `android.arm32`,
+`android.x86_64` and `android.x86_32`, those files land in all four slices, no
+generic `android` slice is published, and every slice stays installable on its
+own. Naming the architecture slices individually instead would claim one file for
+four slices, which is refused; naming just one would leave the other three ABIs
+with a complete slice and no plugin.
+
+The fan-out only applies where the addon's own `.gdextension` names at least one
+architecture for the platform. When it names none, nothing says which
+architectures the platform's generic files are for, and inventing an answer would
+drop every host that resolves to a different one, so the config is reported
+instead:
+
+```text
+slice "android" would be published beside "android.arm64"; a host installs the
+first slice of its platform it finds, so the files of "android" would never be
+installed on a host that resolves to an architecture, and the extras naming
+"android" must name those architecture slices instead
+```
+
+Because a fanned-out file is published in several archives, a project that
+selects more than one architecture of that platform — one declaring both Android
+ABIs, or any `gpm install --all-platforms` — extracts it more than once. `gpm`
+accepts the repeat when the two slices are architecture slices of one platform
+and the bytes agree, and reports the release otherwise.
 
 ### gpm package
 

@@ -103,3 +103,38 @@ func TestFanOutPlanDoesNotFanOutAPlatformWhoseExtensionNamesNoArchitecture(t *te
 	require.False(t, plan.suppresses(sliceID("macos", "")))
 	require.Equal(t, []slice.SliceID{sliceID("macos", "")}, plan.targetsOf(sliceID("macos", "")))
 }
+
+func TestFanOutPlanSuppressesAGenericSliceDeclaredOnlyByExtras(t *testing.T) {
+	plan := newFanOutPlan(
+		[]slice.SliceID{sliceID("android", "arm32"), sliceID("android", "arm64")},
+		[]slice.SliceID{sliceID("android", "")},
+	)
+
+	require.True(t, plan.suppresses(sliceID("android", "")))
+	require.Equal(t,
+		[]slice.SliceID{sliceID("android", "arm32"), sliceID("android", "arm64")},
+		plan.targetsOf(sliceID("android", "")),
+	)
+}
+
+func TestFanOutPlanWidensADeclaredGenericSlicesTargetsToADeclaredArchitecture(t *testing.T) {
+	plan := newFanOutPlan(
+		[]slice.SliceID{sliceID("android", "arm64")},
+		[]slice.SliceID{sliceID("android", ""), sliceID("android", "x86_64")},
+	)
+
+	require.Equal(t,
+		[]slice.SliceID{sliceID("android", "arm64"), sliceID("android", "x86_64")},
+		plan.targetsOf(sliceID("android", "")),
+	)
+}
+
+func TestFanOutPlanDoesNotSuppressAGenericSliceDeclaredBesideNoArchitectureEntries(t *testing.T) {
+	plan := newFanOutPlan(
+		[]slice.SliceID{sliceID("linux", "x86_64")},
+		[]slice.SliceID{sliceID("android", ""), sliceID("android", "arm64")},
+	)
+
+	require.False(t, plan.suppresses(sliceID("android", "")))
+	require.Empty(t, plan.suppressedPlatforms())
+}
