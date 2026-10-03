@@ -120,6 +120,28 @@ gpm: [project]: invalid platforms entry: invalid platform tag "MacOS": unknown p
 gpm: [project]: invalid platforms entry: platform "core" is implicit and may not be declared; every project receives the core slice
 ```
 
+## A Shared Artifact Is Missing Or Does Not Match The Index
+
+Every format-2 shared archive must be published beside `gpm-index.toml` and the
+slice archives. A release that omits one reports:
+
+```text
+gpm: artifact "android" names archive "sentry-2.3.0-shared-android.zip", which the addon's publisher does not offer
+```
+
+A failed download is reported as `downloading artifact "android": ...`. Bytes
+that disagree with the index fail before extraction:
+
+```text
+gpm: artifact "android": checksum mismatch (index: 0000000a..., downloaded: 8ffda2f9...)
+gpm: artifact "android": size mismatch (index: 76001 bytes, downloaded: 76000 bytes)
+```
+
+All are exit code 4 and install nothing. The publisher must upload the named
+`<name>-<version>-shared-<platform>.zip` from the same packaging run. A shared
+artifact is also checked separately against `--max-download-size`, just like
+each slice archive; raise that limit only after confirming the expected size.
+
 ## A Slice Or Shared-Artifact Checksum Does Not Match
 
 A slice archive's bytes do not match the SHA-256 that `addons.lock` pins for it:
