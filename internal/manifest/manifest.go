@@ -99,7 +99,7 @@ func rejectUnknownProjectKeys(path string, metaData toml.MetaData) error {
 // a platforms key, so a load-modify-save cycle preserves inheritance instead of
 // freezing the resolved list into a per-addon override.
 func (m *Manifest) Save(path string) error {
-	encoded := m.withoutInheritedPlatforms()
+	encoded := m.forSave()
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".addons-*.tmp")
 	if err != nil {
 		return fmt.Errorf("creating temp manifest: %w", err)
@@ -127,17 +127,45 @@ func (m *Manifest) Save(path string) error {
 	return nil
 }
 
-// withoutInheritedPlatforms returns a shallow copy of the manifest in which
-// every addon that inherited its platform list carries no list of its own, which
-// is the form the manifest was read in. The receiver is left untouched so a
-// caller that saves and keeps using the manifest still sees resolved platforms.
-func (m *Manifest) withoutInheritedPlatforms() *Manifest {
-	addons := make(map[string]AddonSpec, len(m.Addons))
+// manifestForSave uses a pointer for Platforms so the TOML encoder can
+// distinguish an inherited, omitted key from an explicit empty override. A
+// plain []string with omitempty cannot represent that distinction: both nil
+// and [] encode as no key.
+type manifestForSave struct {
+	Project ProjectConfig               `toml:"project"`
+	Addons  map[string]addonSpecForSave `toml:"addons"`
+}
+
+type addonSpecForSave struct {
+	Source     SourceType `toml:"source"`
+	URL        string     `toml:"url,omitempty"`
+	Repo       string     `toml:"repo,omitempty"`
+	Version    string     `toml:"version,omitempty"`
+	Asset      string     `toml:"asset,omitempty"`
+	SourcePath string     `toml:"source_path,omitempty"`
+	InstallAs  string     `toml:"install_as,omitempty"`
+	Exclude    []string   `toml:"exclude,omitempty"`
+	Platforms  *[]string  `toml:"platforms,omitempty"`
+	Index      string     `toml:"index,omitempty"`
+	Checksum   string     `toml:"checksum,omitempty"`
+}
+
+// forSave builds the persistence-only form without changing the effective
+// platform lists callers continue to use after Save.
+func (m *Manifest) forSave() *manifestForSave {
+	addons := make(map[string]addonSpecForSave, len(m.Addons))
 	for name, addon := range m.Addons {
-		if addon.platformsInherited {
-			addon.Platforms = nil
+		var platforms *[]string
+		if !addon.platformsInherited && addon.Platforms != nil {
+			declared := slices.Clone(addon.Platforms)
+			platforms = &declared
 		}
-		addons[name] = addon
+		addons[name] = addonSpecForSave{
+			Source: addon.Source, URL: addon.URL, Repo: addon.Repo,
+			Version: addon.Version, Asset: addon.Asset, SourcePath: addon.SourcePath,
+			InstallAs: addon.InstallAs, Exclude: addon.Exclude, Platforms: platforms,
+			Index: addon.Index, Checksum: addon.Checksum,
+		}
 	}
-	return &Manifest{Project: m.Project, Addons: addons}
+	return &manifestForSave{Project: m.Project, Addons: addons}
 }

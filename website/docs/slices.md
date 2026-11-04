@@ -217,6 +217,11 @@ slice. On an addon the two differ, because there is a list to inherit: an absent
 key takes the project's list, while `platforms = []` declares nothing for that
 addon.
 
+For a sliced editor or build tool, `gpm add --host-tool` creates that explicit
+empty addon override and performs the initial install in host-only mode as one
+transaction. This avoids a separate manifest edit followed by an install whose
+selection could disagree with the just-written declaration.
+
 ## Selection Modes
 
 Three modes decide how wide a set `gpm install` and `gpm update` materialize.

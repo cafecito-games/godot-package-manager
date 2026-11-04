@@ -328,3 +328,24 @@ func TestSetAddonKeepsAnExplicitOverride(t *testing.T) {
 	m.SetAddon(AddonSpec{Name: "x", Source: SourceArchive, URL: "https://example.com/a.zip", Platforms: []string{"macos"}})
 	require.Equal(t, []string{"macos"}, m.Addons["x"].Platforms)
 }
+
+func TestSavePreservesExplicitEmptyPlatforms(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "addons.toml")
+	require.NoError(t, os.WriteFile(path, []byte("[project]\nplatforms = [\"ios.arm64\"]\n\n[addons]\n"), 0o644))
+	m, err := Load(path)
+	require.NoError(t, err)
+	m.SetAddon(AddonSpec{
+		Name: "tool", Source: SourceArchive, URL: "https://example.com/tool.zip",
+		Platforms: []string{},
+	})
+	require.NoError(t, m.Save(path))
+
+	saved, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Contains(t, string(saved), "[addons.tool]\n")
+	require.Contains(t, string(saved), "platforms = []")
+	reloaded, err := Load(path)
+	require.NoError(t, err)
+	require.NotNil(t, reloaded.Addons["tool"].Platforms)
+	require.Empty(t, reloaded.Addons["tool"].Platforms)
+}
