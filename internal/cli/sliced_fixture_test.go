@@ -261,7 +261,12 @@ version = %q
 // and did not materialize.
 func installedFiles(t *testing.T, projectRoot string) []string {
 	t.Helper()
-	root := filepath.Join(projectRoot, "addons", slicedAddonName)
+	return installedFilesForAddon(t, projectRoot, slicedAddonName)
+}
+
+func installedFilesForAddon(t *testing.T, projectRoot, addonName string) []string {
+	t.Helper()
+	root := filepath.Join(projectRoot, "addons", addonName)
 	var found []string
 	require.NoError(t, filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
