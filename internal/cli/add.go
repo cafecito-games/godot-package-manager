@@ -15,12 +15,17 @@ import (
 // testFetcherFor, when non-nil, overrides the source layer in tests.
 var testFetcherFor func(manifest.AddonSpec) (source.Fetcher, error)
 
+// newAddRunner is a test seam for proving the add command selects the intended
+// slice policy while exercising the real manifest/install transaction.
+var newAddRunner = NewRunner
+
 // runTUI launches the interactive add wizard.
 var runTUI = tui.RunAddWizard
 
 // addFlags collects the flag values for `gpm add`.
 type addFlags struct {
 	name, source, url, repo, version, asset, sourcePath, installAs, dir string
+	hostTool                                                            bool
 }
 
 // newAddCommand builds `gpm add`.
@@ -49,6 +54,14 @@ func newAddCommand(opts *Options) *cobra.Command {
 					return err
 				}
 			}
+			selectionMode := slice.SelectDeclaredPlatforms
+			if flagValues.hostTool {
+				// A host tool is needed by the editor on the machine running gpm,
+				// not by any export target. The explicit empty override prevents
+				// future [project] platform additions from widening this addon.
+				spec.Platforms = []string{}
+				selectionMode = slice.SelectHostOnly
+			}
 			if _, exists := addonManifest.Addons[spec.Name]; exists {
 				return &UsageError{Err: fmt.Errorf("addon %q already exists", spec.Name)}
 			}
@@ -62,7 +75,7 @@ func newAddCommand(opts *Options) *cobra.Command {
 			if err := addonManifest.Save(discovered.ManifestPath); err != nil {
 				return err
 			}
-			runner := NewRunner(discovered.AddonsDir, discovered.LockPath, discovered.StatePath, limitsFor(opts), slice.SelectDeclaredPlatforms)
+			runner := newAddRunner(discovered.AddonsDir, discovered.LockPath, discovered.StatePath, limitsFor(opts), selectionMode)
 			runner.Diagnosef = func(format string, args ...any) { verbosef(cmd, opts, format, args...) }
 			if testFetcherFor != nil {
 				runner.FetcherFor = testFetcherFor
@@ -95,6 +108,8 @@ func newAddCommand(opts *Options) *cobra.Command {
 	flags.StringVar(&flagValues.sourcePath, "source-path", "", "subdirectory within the source to install")
 	flags.StringVar(&flagValues.installAs, "install-as", "", "install directory name (default: addon name)")
 	flags.StringVar(&flagValues.dir, "dir", "", "start directory for project discovery")
+	flags.BoolVar(&flagValues.hostTool, "host-tool", false,
+		"declare platforms = [] and install only the current host slice")
 	return cmd
 }
 

@@ -54,6 +54,23 @@ gpm add --name raw_thing \
   --url https://example.com/thing-1.0.zip
 ```
 
+Add a sliced editor or build tool for the current host without inheriting the
+game's export platforms:
+
+```bash
+gpm add --name gdtest \
+  --source github-release \
+  --repo cafecito-games/gdtest \
+  --version v1.0.0 \
+  --host-tool
+```
+
+`--host-tool` atomically writes `platforms = []` on that addon entry and
+installs only `core` plus the current host slice. The explicit empty override
+keeps later additions to `[project] platforms` from turning a host executable
+into an export dependency. If installation fails, the addon entry is rolled
+back with the rest of the `gpm add` transaction.
+
 Available flags:
 
 | Flag | Notes |
@@ -66,6 +83,7 @@ Available flags:
 | `--asset` | GitHub release asset name or glob. |
 | `--source-path` | Subdirectory inside the fetched source. |
 | `--install-as` | Directory name under `addons/`. |
+| `--host-tool` | Write an explicit empty platform override and install only the current host slice. |
 | `--dir` | Start directory for project discovery. |
 
 `gpm add` saves the manifest before installing. If installation fails, it rolls
