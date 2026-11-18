@@ -1,0 +1,30 @@
+{
+  "docsSidebar": [
+    "overview",
+    "quickstart",
+    "installation",
+    "project-layout",
+    {
+      "type": "category",
+      "label": "Usage",
+      "items": [
+        "manifest",
+        "commands",
+        "sources",
+        "slices",
+        "lockfile"
+      ]
+    },
+    {
+      "type": "category",
+      "label": "Automation",
+      "items": [
+        "authentication",
+        "json-output",
+        "troubleshooting"
+      ]
+    },
+    "development",
+    "releases"
+  ]
+}
