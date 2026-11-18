@@ -16,6 +16,10 @@ import (
 // hashing contents. See StateEntry.FileManifestVersion for the exact contract.
 const CurrentFileManifestVersion = 1
 
+// SymlinkFileManifestVersion extends version 1 with required relative-symlink
+// paths when an installed addon contains contained relative symlinks.
+const SymlinkFileManifestVersion = 2
+
 // StateEntry records what one addon materialized on this machine.
 type StateEntry struct {
 	ResolvedVersion string   `toml:"resolved_version"`    // the version these slices came from
@@ -24,11 +28,14 @@ type StateEntry struct {
 
 	// FileManifestVersion selects the on-disk completeness check. Version 1
 	// records the relative paths of installed regular files in Files and checks
-	// that each path still names a regular file. This deliberately does not hash
-	// contents or reject extra paths, so in-place edits and additions are left
-	// alone; it also does not detect removal of an empty directory.
+	// that each path still names a regular file; version 2 additionally records
+	// contained relative symlinks in Symlinks when the addon installs any. This
+	// deliberately does not hash contents or reject extra paths, so in-place
+	// edits and additions are left alone; it also does not detect removal of an
+	// empty directory.
 	FileManifestVersion int      `toml:"file_manifest_version,omitempty"`
 	Files               []string `toml:"files,omitempty"`
+	Symlinks            []string `toml:"symlinks,omitempty"`
 
 	// Pin identifies the lockfile pin these slices were materialized from: a
 	// format-1 sliced addon's index_sha256, a format-2 addon's
@@ -46,6 +53,13 @@ type StateEntry struct {
 	// It is empty for a source whose resolved version is already its content
 	// identity, which is every git source.
 	Pin string `toml:"pin,omitempty"`
+}
+
+// HasFileManifest reports whether FileManifestVersion is a completeness-check
+// version supported by this gpm release.
+func (entry StateEntry) HasFileManifest() bool {
+	return entry.FileManifestVersion == CurrentFileManifestVersion ||
+		entry.FileManifestVersion == SymlinkFileManifestVersion
 }
 
 // State is the parsed contents of .gpm-state.toml, a machine-local and
@@ -152,6 +166,7 @@ func (state *State) sorted() *State {
 		entry.Slices = slices.Sorted(slices.Values(entry.Slices))
 		entry.Artifacts = slices.Sorted(slices.Values(entry.Artifacts))
 		entry.Files = slices.Sorted(slices.Values(entry.Files))
+		entry.Symlinks = slices.Sorted(slices.Values(entry.Symlinks))
 		normalized.Addons[name] = entry
 	}
 	return normalized

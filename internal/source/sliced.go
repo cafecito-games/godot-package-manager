@@ -2,6 +2,7 @@ package source
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -224,7 +225,7 @@ func (f *slicedFetcher) mergeSlices(
 			return err
 		}
 	}
-	return nil
+	return guard.finalize(staging)
 }
 
 // mergeSlice downloads one slice archive, verifies it against the index by both
@@ -436,11 +437,19 @@ func reassembleExtensions(
 		if err != nil {
 			return err
 		}
-		info, err := os.Stat(destination)
+		info, err := os.Lstat(destination)
 		if err != nil {
-			return fetchErrorf(
-				"the index declares entries for %q, but the %q slice ships no such file, so there is no body to reassemble them into",
-				extensionPath, slice.CorePlatform)
+			if errors.Is(err, os.ErrNotExist) {
+				return fetchErrorf(
+					"the index declares entries for %q, but the %q slice ships no such file, so there is no body to reassemble them into",
+					extensionPath, slice.CorePlatform)
+			}
+			return &output.InstallError{Err: err}
+		}
+		if !info.Mode().IsRegular() {
+			return &output.InstallError{Err: fmt.Errorf(
+				"partitioned extension %q in slice %q must be a regular file",
+				extensionPath, slice.CorePlatform)}
 		}
 		core, err := os.ReadFile(destination)
 		if err != nil {

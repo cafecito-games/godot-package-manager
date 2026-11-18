@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -110,6 +111,50 @@ func TestWriteArchiveRefusesASourceReplacedByASymlink(t *testing.T) {
 	require.Contains(t, err.Error(), "plugin.gd")
 	_, statErr := os.Stat(archivePath)
 	require.True(t, os.IsNotExist(statErr))
+}
+
+func TestWriteArchiveEmitsContainedSymlinkEntriesReproducibly(t *testing.T) {
+	directory := t.TempDir()
+	frameworkPath := filepath.Join(directory, "SwiftGodot.framework")
+	require.NoError(t, os.MkdirAll(filepath.Join(frameworkPath, "Versions", "A"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(frameworkPath, "Versions", "A", "SwiftGodot"), []byte("macho"), 0o755))
+	require.NoError(t, os.Symlink("A", filepath.Join(frameworkPath, "Versions", "Current")))
+	require.NoError(t, os.Symlink("Versions/Current/SwiftGodot", filepath.Join(frameworkPath, "SwiftGodot")))
+
+	tree, err := walkAddonTree(directory, ".")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, tree.close()) }()
+
+	entries := []archiveFile{
+		tree.archiveFileAt("SwiftGodot.framework/SwiftGodot"),
+		tree.archiveFileAt("SwiftGodot.framework/Versions/A/SwiftGodot"),
+		tree.archiveFileAt("SwiftGodot.framework/Versions/Current"),
+	}
+	firstArchive := filepath.Join(t.TempDir(), "first.zip")
+	secondArchive := filepath.Join(t.TempDir(), "second.zip")
+	require.NoError(t, writeArchive(firstArchive, entries))
+	require.NoError(t, writeArchive(secondArchive, entries))
+
+	firstBytes, err := os.ReadFile(firstArchive)
+	require.NoError(t, err)
+	secondBytes, err := os.ReadFile(secondArchive)
+	require.NoError(t, err)
+	require.Equal(t, firstBytes, secondBytes)
+
+	reader, err := zip.OpenReader(firstArchive)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, reader.Close()) }()
+	require.Len(t, reader.File, 3)
+
+	require.Equal(t, "SwiftGodot.framework/SwiftGodot", reader.File[0].Name)
+	require.NotZero(t, reader.File[0].Mode()&os.ModeSymlink)
+	require.Equal(t, os.FileMode(0o777), reader.File[0].Mode().Perm())
+	readCloser, err := reader.File[0].Open()
+	require.NoError(t, err)
+	targetBytes, err := io.ReadAll(readCloser)
+	require.NoError(t, err)
+	require.NoError(t, readCloser.Close())
+	require.Equal(t, "Versions/Current/SwiftGodot", string(targetBytes))
 }
 
 func TestMeasureArchiveHashesAndSizesTheSameFile(t *testing.T) {

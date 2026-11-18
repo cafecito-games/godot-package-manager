@@ -1,15 +1,18 @@
 package packager
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/cafecito-games/godot-package-manager/internal/symlink"
 )
 
-// treeFile is one regular file of the addon subtree.
+// treeFile is one regular file or contained relative symlink of the addon subtree.
 type treeFile struct {
 	// relativePath is the file's path relative to the addon root, with "/"
 	// separators. It is the archive entry name, and for a .gdextension it is also
@@ -18,8 +21,13 @@ type treeFile struct {
 	// walk, the partition, the archives, and the index.
 	relativePath string
 
-	// executable records whether any execute bit is set on disk.
+	// executable records whether any execute bit is set on disk for a regular file.
 	executable bool
+
+	// isSymlink reports whether this entry is a contained relative symlink, and
+	// linkTarget holds its normalized "/"-separated relative target.
+	isSymlink  bool
+	linkTarget string
 }
 
 // addonTree is the addon subtree as packaging sees it: every regular file under
@@ -51,12 +59,13 @@ type addonTree struct {
 // its validation and this call cannot place the addon root outside the
 // repository.
 //
-// A symlink anywhere in the subtree is rejected rather than followed or skipped.
-// The installer already refuses symlinks in a fetched tree, so an archive
-// carrying one would either be refused at install time or, if followed here,
-// would smuggle a file from outside the addon into a slice. Anything that is
-// neither a directory nor a regular file — a socket, a device, a named pipe — is
-// refused for the same reason: it carries nothing a consumer can install, and
+// A relative symlink whose target stays inside the addon subtree is recorded as
+// a symlink archive entry so bundles such as macOS frameworks retain their
+// versioned link structure; any symlink whose target is absolute, escapes the
+// addon root directly or by chaining, or forms a cycle is refused so authoring
+// fails fast rather than emitting an un-installable archive. Anything else that
+// is neither a directory nor a regular file — a socket, a device, a named pipe —
+// is refused for the same reason: it carries nothing a consumer can install, and
 // guessing at it is worse than reporting it.
 //
 // An addon with no files is refused: there is nothing to publish, and an index
@@ -79,6 +88,7 @@ func walkAddonTree(repositoryRoot, addonPath string) (*addonTree, error) {
 
 // walk fills the tree from the open addon root.
 func (tree *addonTree) walk() error {
+	symlinks := symlink.NewTree()
 	walkErr := fs.WalkDir(tree.root.FS(), ".", func(relativePath string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return manifestErrorf("reading the addon subtree at %s: %s", tree.describe(relativePath), err)
@@ -94,11 +104,34 @@ func (tree *addonTree) walk() error {
 		}
 		switch {
 		case entry.Type()&os.ModeSymlink != 0:
-			return manifestErrorf(
-				"%s is a symlink; a slice archive carries regular files only, so replace it with the file it points at",
-				relativePath,
-			)
+			info, err := tree.root.Lstat(relativePath)
+			if err != nil {
+				return manifestErrorf("reading %s: %s", relativePath, err)
+			}
+			if info.Mode()&os.ModeSymlink == 0 {
+				return manifestErrorf("%s is no longer a symlink, so it cannot be packaged", relativePath)
+			}
+			rawTarget, err := tree.root.Readlink(relativePath)
+			if err != nil {
+				return manifestErrorf("reading symlink %s: %s", relativePath, err)
+			}
+			normalizedTarget, err := symlink.NormalizeFilesystemTarget(rawTarget)
+			if err != nil {
+				return manifestErrorf("%s is a symlink with an unsupported target %q: %s", relativePath, rawTarget, err)
+			}
+			if err := symlinks.AddSymlink(relativePath, normalizedTarget); err != nil {
+				return symlinkWalkManifestError(relativePath, normalizedTarget, err)
+			}
+			tree.files = append(tree.files, treeFile{
+				relativePath: relativePath,
+				isSymlink:    true,
+				linkTarget:   normalizedTarget,
+			})
+			return nil
 		case entry.IsDir():
+			if err := symlinks.AddDirectory(relativePath); err != nil {
+				return symlinkWalkManifestError(relativePath, "", err)
+			}
 			return nil
 		case !entry.Type().IsRegular():
 			return manifestErrorf("%s is neither a regular file nor a directory, so it cannot be packaged", relativePath)
@@ -112,6 +145,9 @@ func (tree *addonTree) walk() error {
 		if !info.Mode().IsRegular() {
 			return manifestErrorf("%s is not a regular file, so it cannot be packaged", relativePath)
 		}
+		if err := symlinks.AddFile(relativePath); err != nil {
+			return symlinkWalkManifestError(relativePath, "", err)
+		}
 		tree.files = append(tree.files, treeFile{
 			relativePath: relativePath,
 			executable:   info.Mode().Perm()&0o111 != 0,
@@ -120,6 +156,9 @@ func (tree *addonTree) walk() error {
 	})
 	if walkErr != nil {
 		return walkErr
+	}
+	if _, err := symlinks.Validate(); err != nil {
+		return symlinkWalkManifestError("", "", err)
 	}
 	sort.Slice(tree.files, func(left, right int) bool {
 		return tree.files[left].relativePath < tree.files[right].relativePath
@@ -131,6 +170,22 @@ func (tree *addonTree) walk() error {
 		return manifestErrorf("the addon subtree at %s holds no files, so there is nothing to package", tree.path)
 	}
 	return nil
+}
+
+func symlinkWalkManifestError(fallbackPath, fallbackTarget string, err error) error {
+	var symlinkErr *symlink.Error
+	if errors.As(err, &symlinkErr) {
+		entryPath := symlinkErr.Path
+		if entryPath == "" {
+			entryPath = fallbackPath
+		}
+		target := symlinkErr.Target
+		if target == "" {
+			target = fallbackTarget
+		}
+		return manifestErrorf("%s is a symlink with an unsupported target %q: %s", entryPath, target, symlinkErr.Reason)
+	}
+	return manifestErrorf("%s is a symlink with an unsupported target %q: %s", fallbackPath, fallbackTarget, err)
 }
 
 // openAddonRoot opens the addon subtree as an *os.Root inside the repository
@@ -251,12 +306,14 @@ func (tree *addonTree) sourceAt(relativePath string) fileSource {
 	}
 }
 
-// archiveFileAt returns the archive entry for a walked file.
+// archiveFileAt returns the archive entry for a walked file or symlink.
 func (tree *addonTree) archiveFileAt(relativePath string) archiveFile {
 	file := tree.files[tree.positions[relativePath]]
 	return archiveFile{
 		archivePath: file.relativePath,
 		source:      tree.sourceAt(relativePath),
 		executable:  file.executable,
+		isSymlink:   file.isSymlink,
+		linkTarget:  file.linkTarget,
 	}
 }

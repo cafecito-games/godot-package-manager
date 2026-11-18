@@ -12,6 +12,7 @@ import (
 	"github.com/cafecito-games/godot-package-manager/internal/manifest"
 	"github.com/cafecito-games/godot-package-manager/internal/output"
 	"github.com/cafecito-games/godot-package-manager/internal/source"
+	"github.com/cafecito-games/godot-package-manager/internal/symlink"
 )
 
 // Install resolves the source subtree within fetched.Dir and copies it into
@@ -45,7 +46,7 @@ func Install(fetched source.FetchResult, spec manifest.AddonSpec, addonsDir stri
 
 	if err := copyTree(sourceRoot, staging, spec.Exclude); err != nil {
 		_ = os.RemoveAll(staging)
-		return &output.InstallError{Err: err}
+		return wrapInstallError(err)
 	}
 
 	// Atomically swap staging into place, preserving the old directory as a
@@ -114,33 +115,47 @@ func containmentCheck(addonsDir, destination string) error {
 // sourcePath is set it is used directly. Otherwise a single addons/<name>/
 // directory is auto-detected; if no addons/ dir exists, root is used.
 func resolveSourcePath(root, sourcePath string) (string, error) {
+	cleanRoot := filepath.Clean(root)
 	if sourcePath != "" {
-		resolved := filepath.Join(root, sourcePath)
-		cleanRoot := filepath.Clean(root)
+		resolved := filepath.Join(cleanRoot, sourcePath)
 		cleanResolved := filepath.Clean(resolved)
 		if cleanResolved != cleanRoot && !strings.HasPrefix(cleanResolved, cleanRoot+string(os.PathSeparator)) {
 			return "", &output.InstallError{Err: fmt.Errorf("source_path %q escapes the fetched source root", sourcePath)}
 		}
-		info, err := os.Stat(resolved)
+		if err := requireNoSymlinkBetween(cleanRoot, cleanResolved, sourcePath); err != nil {
+			return "", err
+		}
+		info, err := os.Lstat(cleanResolved)
 		if err != nil {
 			return "", &output.InstallError{Err: fmt.Errorf("source_path %q in fetched source: %w", sourcePath, err)}
 		}
 		if !info.IsDir() {
 			return "", &output.InstallError{Err: fmt.Errorf("source_path %q is not a directory", sourcePath)}
 		}
-		return resolved, nil
+		return cleanResolved, nil
 	}
-	addonsDir := filepath.Join(root, "addons")
-	entries, err := os.ReadDir(addonsDir)
+	addonsDir := filepath.Join(cleanRoot, "addons")
+	addonsInfo, err := os.Lstat(addonsDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			// No addons/ directory: install from the fetched root.
-			return root, nil
+			return cleanRoot, nil
 		}
+		return "", &output.InstallError{Err: fmt.Errorf("reading addons directory: %w", err)}
+	}
+	if addonsInfo.Mode()&os.ModeSymlink != 0 {
+		return "", &output.InstallError{Err: fmt.Errorf("addon source contains an unsupported symlink: addons")}
+	}
+	entries, err := os.ReadDir(addonsDir)
+	if err != nil {
 		return "", &output.InstallError{Err: fmt.Errorf("reading addons directory: %w", err)}
 	}
 	var directories []string
 	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 {
+			return "", &output.InstallError{Err: fmt.Errorf(
+				"addon source contains an unsupported symlink: %s", filepath.Join("addons", entry.Name()))}
+		}
 		if entry.IsDir() {
 			directories = append(directories, entry.Name())
 		}
@@ -149,49 +164,130 @@ func resolveSourcePath(root, sourcePath string) (string, error) {
 	case 1:
 		return filepath.Join(addonsDir, directories[0]), nil
 	case 0:
-		return root, nil
+		return cleanRoot, nil
 	default:
 		return "", &output.InstallError{Err: fmt.Errorf(
 			"fetched source has multiple directories under addons/; set source_path explicitly")}
 	}
 }
 
-// copyTree recursively copies the directory src to dst.
-// Symlinks anywhere in the tree are rejected to prevent host-file exposure.
-func copyTree(src, dst string, excludeDirs []string) error {
+func requireNoSymlinkBetween(cleanRoot, cleanTarget, rawSourcePath string) error {
+	relative, err := filepath.Rel(cleanRoot, cleanTarget)
+	if err != nil || relative == "." {
+		return nil
+	}
+	traversed := cleanRoot
+	for _, component := range strings.Split(relative, string(os.PathSeparator)) {
+		traversed = filepath.Join(traversed, component)
+		info, err := os.Lstat(traversed)
+		if err != nil {
+			return &output.InstallError{Err: fmt.Errorf("source_path %q in fetched source: %w", rawSourcePath, err)}
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return &output.InstallError{Err: fmt.Errorf(
+				"addon source contains an unsupported symlink: %s", component)}
+		}
+	}
+	return nil
+}
+
+// copyTree recursively copies source to destination, materializing relative
+// symlinks whose targets stay within destination and rejecting symlinks whose
+// targets are absolute or escape destination.
+func copyTree(source, destination string, excludeDirs []string) error {
 	excludeSet := make(map[string]struct{}, len(excludeDirs))
 	for _, excludeDir := range excludeDirs {
 		excludeSet[cleanExcludeDir(excludeDir)] = struct{}{}
 	}
+	symlinks := symlink.NewTree()
 
-	return filepath.WalkDir(src, func(path string, entry os.DirEntry, err error) error {
+	walkErr := filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		relative, err := filepath.Rel(src, path)
+		relative, err := filepath.Rel(source, path)
 		if err != nil {
 			return err
 		}
 		relative = filepath.Clean(relative)
+		if relative == "." {
+			if entry.Type()&os.ModeSymlink != 0 {
+				return unsupportedSourceSymlinkError(entry.Name(), fmt.Errorf("addon root must not be a symlink"))
+			}
+			return os.MkdirAll(destination, 0o755)
+		}
 		if entry.IsDir() {
 			if _, excluded := excludeSet[relative]; excluded {
 				return filepath.SkipDir
 			}
 		}
+		relativeSlash := filepath.ToSlash(relative)
 		if entry.Type()&os.ModeSymlink != 0 {
-			return &output.InstallError{Err: fmt.Errorf(
-				"addon source contains an unsupported symlink: %s", entry.Name())}
+			rawTarget, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			normalizedTarget, err := symlink.NormalizeFilesystemTarget(rawTarget)
+			if err != nil {
+				return unsupportedSourceSymlinkError(relativeSlash, err)
+			}
+			if err := symlinks.AddSymlink(relativeSlash, normalizedTarget); err != nil {
+				return unsupportedSourceSymlinkError(relativeSlash, err)
+			}
+			return nil
 		}
-		target := filepath.Join(dst, relative)
+		target := filepath.Join(destination, relative)
 		if entry.IsDir() {
+			if err := symlinks.AddDirectory(relativeSlash); err != nil {
+				return unsupportedSourceSymlinkError(relativeSlash, err)
+			}
 			return os.MkdirAll(target, 0o755)
 		}
 		info, err := entry.Info()
 		if err != nil {
 			return err
 		}
+		if !info.Mode().IsRegular() {
+			return &output.InstallError{Err: fmt.Errorf(
+				"addon source contains an unsupported file type: %s", relativeSlash)}
+		}
+		if err := symlinks.AddFile(relativeSlash); err != nil {
+			return unsupportedSourceSymlinkError(relativeSlash, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
 		return copyFile(path, target, info.Mode())
 	})
+	if walkErr != nil {
+		return walkErr
+	}
+	if err := symlinks.Materialize(destination); err != nil {
+		return unsupportedSourceSymlinkError("", err)
+	}
+	return nil
+}
+
+func unsupportedSourceSymlinkError(fallbackName string, err error) error {
+	var symlinkErr *symlink.Error
+	if errors.As(err, &symlinkErr) {
+		name := symlinkErr.Path
+		if name == "" {
+			name = fallbackName
+		}
+		return &output.InstallError{Err: fmt.Errorf(
+			"addon source contains an unsupported symlink: %s (%s)", name, symlinkErr.Reason)}
+	}
+	return &output.InstallError{Err: fmt.Errorf(
+		"addon source contains an unsupported symlink: %s (%v)", fallbackName, err)}
+}
+
+func wrapInstallError(err error) error {
+	var installErr *output.InstallError
+	if errors.As(err, &installErr) {
+		return err
+	}
+	return &output.InstallError{Err: err}
 }
 
 func cleanExcludeDir(excludeDir string) string {

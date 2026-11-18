@@ -48,6 +48,7 @@ committing it would publish one machine's layout to the whole team.
 | `pin` | The lockfile pin these slices were materialized from. |
 | `file_manifest_version` | The completeness-check schema used for this install. |
 | `files` | Relative paths that must still be regular files under the installed addon. |
+| `symlinks` | Relative paths that must still be contained relative symbolic links under the installed addon (emitted with `file_manifest_version = 2` when the addon installs symbolic links). |
 
 `pin` is a format-1 sliced addon's `index_sha256`, a format-2 addon's
 `format2:<index_sha256>`, or an unsliced addon's archive checksum. It is empty
@@ -61,12 +62,15 @@ resolved version — while their committed `addons.lock` files pin different byt
 Comparing the pin is what stops a state entry written against one lock from
 satisfying another and leaving the wrong files in place, unfetched and unverified.
 
-The version 1 file manifest checks paths, not file contents. If a recorded file
-has been deleted or replaced by something other than a regular file, the next
+The file manifest checks paths, not file contents. Version 1 records regular
+files; version 2 additionally records contained relative symbolic links when an
+addon ships bundles such as macOS `.framework` directories. If a recorded file
+has been deleted or replaced by something other than a regular file, or if a
+recorded symbolic link is missing or points outside the installed addon, the next
 `gpm install` re-fetches and replaces that addon's directory. Editing an existing
 file or adding a new file does not trigger a re-fetch, so developing an addon in
 place does not create an install loop. `gpm list` reports an addon with a missing
-recorded file as not installed. Removing an empty directory is not detected.
+recorded file or symbolic link as not installed. Removing an empty directory is not detected.
 Because repair replaces the whole addon directory, any local edits can still be
 lost when a different recorded file is missing; commit or copy work you need
 before using `gpm install` to repair an addon.

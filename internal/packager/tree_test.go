@@ -26,16 +26,69 @@ func TestWalkAddonTreeCollectsRegularFilesInOrder(t *testing.T) {
 }
 
 func TestWalkAddonTreeRejectsASymlink(t *testing.T) {
-	root := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(root, "plugin.gd"), []byte("a"), 0o644))
-	require.NoError(t, os.Symlink(filepath.Join(root, "plugin.gd"), filepath.Join(root, "alias.gd")))
+	t.Run("absolute target", func(t *testing.T) {
+		root := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(root, "plugin.gd"), []byte("a"), 0o644))
+		require.NoError(t, os.Symlink(filepath.Join(root, "plugin.gd"), filepath.Join(root, "alias.gd")))
 
-	_, err := walkAddonTree(root, ".")
-	require.Error(t, err)
-	var manifestError *output.ManifestError
-	require.ErrorAs(t, err, &manifestError)
-	require.Equal(t, output.ExitManifest, output.CodeFor(err))
-	require.Contains(t, err.Error(), "alias.gd")
+		_, err := walkAddonTree(root, ".")
+		require.Error(t, err)
+		var manifestError *output.ManifestError
+		require.ErrorAs(t, err, &manifestError)
+		require.Equal(t, output.ExitManifest, output.CodeFor(err))
+		require.Contains(t, err.Error(), "alias.gd")
+	})
+
+	t.Run("parent traversal escape", func(t *testing.T) {
+		root := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(root, "plugin.gd"), []byte("a"), 0o644))
+		require.NoError(t, os.Symlink("../secret", filepath.Join(root, "escape")))
+
+		_, err := walkAddonTree(root, ".")
+		require.Error(t, err)
+		var manifestError *output.ManifestError
+		require.ErrorAs(t, err, &manifestError)
+		require.Contains(t, err.Error(), "escape")
+	})
+
+	t.Run("chained escape across two individually contained links", func(t *testing.T) {
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "a", "b"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "plugin.gd"), []byte("a"), 0o644))
+		require.NoError(t, os.Symlink("../..", filepath.Join(root, "a", "b", "up")))
+		require.NoError(t, os.Symlink("up/../secret", filepath.Join(root, "a", "b", "escape")))
+
+		_, err := walkAddonTree(root, ".")
+		require.Error(t, err)
+		var manifestError *output.ManifestError
+		require.ErrorAs(t, err, &manifestError)
+		require.Contains(t, err.Error(), "a/b/escape")
+	})
+}
+
+func TestWalkAddonTreeAcceptsContainedRelativeSymlinks(t *testing.T) {
+	root := t.TempDir()
+	frameworkPath := filepath.Join(root, "bin", "addon.framework")
+	require.NoError(t, os.MkdirAll(filepath.Join(frameworkPath, "Versions", "A", "Resources"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(frameworkPath, "Versions", "A", "addon"), []byte("binary"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(frameworkPath, "Versions", "A", "Resources", "Info.plist"), []byte("plist"), 0o644))
+	require.NoError(t, os.Symlink("A", filepath.Join(frameworkPath, "Versions", "Current")))
+	require.NoError(t, os.Symlink("Versions/Current/addon", filepath.Join(frameworkPath, "addon")))
+	require.NoError(t, os.Symlink("Versions/Current/Resources", filepath.Join(frameworkPath, "Resources")))
+	require.NoError(t, os.Symlink("Versions/Current/Headers", filepath.Join(frameworkPath, "Headers")))
+
+	tree, err := walkAddonTree(root, ".")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, tree.close()) }()
+
+	require.Equal(t, []string{
+		"bin/addon.framework/Headers",
+		"bin/addon.framework/Resources",
+		"bin/addon.framework/Versions/A/Resources/Info.plist",
+		"bin/addon.framework/Versions/A/addon",
+		"bin/addon.framework/Versions/Current",
+		"bin/addon.framework/addon",
+	}, tree.resolve("bin/addon.framework"))
 }
 
 func TestWalkAddonTreeRejectsAnEmptyTree(t *testing.T) {

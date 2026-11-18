@@ -16,6 +16,7 @@ import (
 	"github.com/cafecito-games/godot-package-manager/internal/output"
 	"github.com/cafecito-games/godot-package-manager/internal/slice"
 	"github.com/cafecito-games/godot-package-manager/internal/source"
+	"github.com/cafecito-games/godot-package-manager/internal/symlink"
 )
 
 // InstallMode controls whether the lockfile pins are honored.
@@ -180,7 +181,7 @@ func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Mani
 		if err != nil {
 			return nil, err
 		}
-		installedFiles, err := installedFileManifest(filepath.Join(r.AddonsDir, spec.InstallName()))
+		installedFiles, installedSymlinks, err := installedTreeManifest(filepath.Join(r.AddonsDir, spec.InstallName()))
 		if err != nil {
 			return nil, &output.InstallError{Err: fmt.Errorf(
 				"recording installed files for addon %q: %w", spec.Name, err)}
@@ -194,7 +195,7 @@ func (r *Runner) InstallAddons(ctx context.Context, addonManifest *manifest.Mani
 		// are both durable, so state never claims slices that are not on disk
 		// or that the lock does not pin. The reverse — on disk but unrecorded —
 		// only costs the next run a re-materialization.
-		stateEntry := stateEntryFor(lockEntry, fetched, installedFiles)
+		stateEntry := stateEntryFor(lockEntry, fetched, installedFiles, installedSymlinks)
 		state.Addons[spec.Name] = stateEntry
 		if err := r.saveState(state); err != nil {
 			return nil, err
@@ -481,34 +482,68 @@ func lockEntryFor(spec manifest.AddonSpec, fetched source.FetchResult) manifest.
 // which is the subset of the published set the selection mode asked for, and
 // the lock pin it came from. The pin is read off the entry being written to the
 // lock rather than recomputed, so the two records cannot disagree.
-func stateEntryFor(entry manifest.LockEntry, fetched source.FetchResult, installedFiles []string) manifest.StateEntry {
+func stateEntryFor(
+	entry manifest.LockEntry,
+	fetched source.FetchResult,
+	installedFiles, installedSymlinks []string,
+) manifest.StateEntry {
 	installed := make([]string, 0, len(fetched.InstalledSlices))
 	for _, id := range fetched.InstalledSlices {
 		installed = append(installed, id.String())
 	}
 	sort.Strings(installed)
+	manifestVersion := manifest.CurrentFileManifestVersion
+	if len(installedSymlinks) > 0 {
+		manifestVersion = manifest.SymlinkFileManifestVersion
+	}
 	return manifest.StateEntry{
 		ResolvedVersion:     fetched.ResolvedVersion,
 		Slices:              installed,
 		Artifacts:           slices.Clone(fetched.InstalledArtifacts),
 		Pin:                 pinOf(entry),
-		FileManifestVersion: manifest.CurrentFileManifestVersion,
+		FileManifestVersion: manifestVersion,
 		Files:               slices.Clone(installedFiles),
+		Symlinks:            slices.Clone(installedSymlinks),
 	}
 }
 
-// installedFileManifest returns the relative paths of the regular files under
-// root. The installer rejects source symlinks, so encountering any non-regular
-// leaf here means the installed tree cannot be described by the version 1 file
-// manifest and the run fails without writing a state record.
-func installedFileManifest(root string) ([]string, error) {
+// installedTreeManifest returns the relative paths of the regular files and
+// contained relative symlinks under root. Encountering an unsafe symlink or any
+// other non-regular leaf means the installed tree cannot be vouched for, so the
+// run fails without writing a state record.
+func installedTreeManifest(root string) ([]string, []string, error) {
 	var files []string
+	var symlinks []string
+	symlinkTree := symlink.NewTree()
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if entry.IsDir() {
+		if path == root {
 			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		relativeSlash := filepath.ToSlash(relative)
+		if entry.Type()&os.ModeSymlink != 0 {
+			rawTarget, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			normalizedTarget, err := symlink.NormalizeFilesystemTarget(rawTarget)
+			if err != nil {
+				return fmt.Errorf("installed symlink %q has unsupported target %q: %w", path, rawTarget, err)
+			}
+			if err := symlinkTree.AddSymlink(relativeSlash, normalizedTarget); err != nil {
+				return fmt.Errorf("installed symlink %q is unsafe: %w", path, err)
+			}
+			symlinks = append(symlinks, relativeSlash)
+			return nil
+		}
+		if entry.IsDir() {
+			return symlinkTree.AddDirectory(relativeSlash)
 		}
 		info, err := entry.Info()
 		if err != nil {
@@ -517,21 +552,24 @@ func installedFileManifest(root string) ([]string, error) {
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("installed path %q is not a regular file", path)
 		}
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
+		if err := symlinkTree.AddFile(relativeSlash); err != nil {
 			return err
 		}
-		files = append(files, filepath.ToSlash(relative))
+		files = append(files, relativeSlash)
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	if _, err := symlinkTree.Validate(); err != nil {
+		return nil, nil, err
 	}
 	sort.Strings(files)
-	return files, nil
+	sort.Strings(symlinks)
+	return files, symlinks, nil
 }
 
-// installedFilesComplete checks only the file paths recorded by the version 1
+// installedFilesComplete checks only the file and symlink paths recorded by the
 // state schema. It intentionally ignores file contents and additional paths:
 // users commonly edit addons in place while developing them, and those edits
 // must not turn every install into another fetch.
@@ -541,28 +579,113 @@ func installedFilesComplete(
 	addonsDir string,
 ) (string, bool) {
 	entry := state.Addons[spec.Name]
-	if entry.FileManifestVersion != manifest.CurrentFileManifestVersion {
+	switch entry.FileManifestVersion {
+	case manifest.CurrentFileManifestVersion:
+		if len(entry.Symlinks) > 0 {
+			return "local state has an inconsistent file manifest", false
+		}
+	case manifest.SymlinkFileManifestVersion:
+		if len(entry.Symlinks) == 0 {
+			return "local state lost its installed-symlink manifest", false
+		}
+	default:
 		return "local state has no installed-file manifest", false
 	}
 	root := filepath.Join(addonsDir, spec.InstallName())
 	// The install root may intentionally be a symlink to a local development
-	// checkout. Follow that link while retaining Lstat for each recorded leaf,
-	// so a required file replaced by a symlink still counts as damaged.
+	// checkout. Follow that link while retaining Lstat for each recorded leaf
+	// and interior directory, so a required file replaced by a symlink still
+	// counts as damaged.
 	rootInfo, err := os.Stat(root)
 	if err != nil || !rootInfo.IsDir() {
 		return "install directory is missing or is not a directory", false
 	}
+
+	var symlinkTree *symlink.Tree
+	if entry.FileManifestVersion == manifest.SymlinkFileManifestVersion {
+		symlinkTree = symlink.NewTree()
+	}
+
 	for _, recorded := range entry.Files {
-		relative := filepath.Clean(filepath.FromSlash(recorded))
-		if relative == "." || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+		relative, ok := cleanStateRelativePath(recorded)
+		if !ok {
 			return fmt.Sprintf("local state contains unsafe installed-file path %q", recorded), false
+		}
+		if !noInteriorSymlink(root, relative) {
+			return fmt.Sprintf("installed file %q passes through a symlinked directory", recorded), false
 		}
 		info, err := os.Lstat(filepath.Join(root, relative))
 		if err != nil || !info.Mode().IsRegular() {
 			return fmt.Sprintf("installed file %q is missing or is not a regular file", recorded), false
 		}
+		if symlinkTree != nil {
+			if err := symlinkTree.AddFile(filepath.ToSlash(relative)); err != nil {
+				return fmt.Sprintf("installed file %q conflicts with recorded symlinks: %v", recorded, err), false
+			}
+		}
+	}
+
+	for _, recorded := range entry.Symlinks {
+		relative, ok := cleanStateRelativePath(recorded)
+		if !ok {
+			return fmt.Sprintf("local state contains unsafe installed-symlink path %q", recorded), false
+		}
+		if !noInteriorSymlink(root, relative) {
+			return fmt.Sprintf("installed symlink %q passes through a symlinked directory", recorded), false
+		}
+		fullPath := filepath.Join(root, relative)
+		info, err := os.Lstat(fullPath)
+		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			return fmt.Sprintf("installed symlink %q is missing or is not a symlink", recorded), false
+		}
+		rawTarget, err := os.Readlink(fullPath)
+		if err != nil {
+			return fmt.Sprintf("installed symlink %q cannot be read", recorded), false
+		}
+		normalizedTarget, err := symlink.NormalizeFilesystemTarget(rawTarget)
+		if err != nil {
+			return fmt.Sprintf("installed symlink %q has an unsafe target", recorded), false
+		}
+		if symlinkTree != nil {
+			if err := symlinkTree.AddSymlink(filepath.ToSlash(relative), normalizedTarget); err != nil {
+				return fmt.Sprintf("installed symlink %q is unsafe: %v", recorded, err), false
+			}
+		}
+	}
+
+	if symlinkTree != nil {
+		if _, err := symlinkTree.Validate(); err != nil {
+			return fmt.Sprintf("installed symlinks are incomplete or unsafe: %v", err), false
+		}
 	}
 	return "", true
+}
+
+func cleanStateRelativePath(recorded string) (string, bool) {
+	if strings.ContainsRune(recorded, 0) || strings.ContainsRune(recorded, '\\') {
+		return "", false
+	}
+	relative := filepath.Clean(filepath.FromSlash(recorded))
+	if relative == "." || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+		return "", false
+	}
+	return relative, true
+}
+
+func noInteriorSymlink(root, relative string) bool {
+	parent := filepath.Dir(relative)
+	if parent == "." {
+		return true
+	}
+	traversed := root
+	for _, component := range strings.Split(parent, string(os.PathSeparator)) {
+		traversed = filepath.Join(traversed, component)
+		info, err := os.Lstat(traversed)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return false
+		}
+	}
+	return true
 }
 
 // pinOf reduces a lock entry to the digest identifying the content it pins: the

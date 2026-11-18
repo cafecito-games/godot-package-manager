@@ -148,16 +148,108 @@ func TestInstallRollbackOnCopyFailure(t *testing.T) {
 }
 
 func TestInstallRejectsSymlink(t *testing.T) {
+	t.Run("absolute target", func(t *testing.T) {
+		addonsDir := t.TempDir()
+		fetched := t.TempDir()
+		writeTree(t, fetched, map[string]string{"plugin.cfg": "x"})
+		require.NoError(t, os.Symlink("/etc/passwd", filepath.Join(fetched, "link_to_secret")))
+
+		err := Install(source.FetchResult{Dir: fetched}, manifest.AddonSpec{Name: "dlg"}, addonsDir)
+		require.Error(t, err)
+		var installErr *output.InstallError
+		require.ErrorAs(t, err, &installErr)
+	})
+
+	t.Run("parent traversal escape", func(t *testing.T) {
+		addonsDir := t.TempDir()
+		fetched := t.TempDir()
+		writeTree(t, fetched, map[string]string{"plugin.cfg": "x"})
+		require.NoError(t, os.Symlink("../../secret", filepath.Join(fetched, "evil")))
+
+		err := Install(source.FetchResult{Dir: fetched}, manifest.AddonSpec{Name: "dlg"}, addonsDir)
+		require.Error(t, err)
+		var installErr *output.InstallError
+		require.ErrorAs(t, err, &installErr)
+	})
+
+	t.Run("escape out of source_path into fetched root", func(t *testing.T) {
+		addonsDir := t.TempDir()
+		fetched := t.TempDir()
+		writeTree(t, fetched, map[string]string{
+			"outside.txt":           "secret",
+			"addons/dlg/plugin.cfg": "x",
+		})
+		require.NoError(t, os.Symlink("../../outside.txt", filepath.Join(fetched, "addons", "dlg", "leak")))
+
+		err := Install(source.FetchResult{Dir: fetched}, manifest.AddonSpec{Name: "dlg"}, addonsDir)
+		require.Error(t, err)
+		var installErr *output.InstallError
+		require.ErrorAs(t, err, &installErr)
+	})
+
+	t.Run("chained escape across two individually contained links", func(t *testing.T) {
+		addonsDir := t.TempDir()
+		fetched := t.TempDir()
+		writeTree(t, fetched, map[string]string{"plugin.cfg": "x"})
+		require.NoError(t, os.MkdirAll(filepath.Join(fetched, "a", "b"), 0o755))
+		require.NoError(t, os.Symlink("../..", filepath.Join(fetched, "a", "b", "up")))
+		require.NoError(t, os.Symlink("up/../secret", filepath.Join(fetched, "a", "b", "escape")))
+
+		err := Install(source.FetchResult{Dir: fetched}, manifest.AddonSpec{Name: "dlg"}, addonsDir)
+		require.Error(t, err)
+		var installErr *output.InstallError
+		require.ErrorAs(t, err, &installErr)
+	})
+
+	t.Run("source_path traversing a symlinked directory", func(t *testing.T) {
+		addonsDir := t.TempDir()
+		outside := t.TempDir()
+		writeTree(t, outside, map[string]string{"dlg/plugin.cfg": "secret"})
+		fetched := t.TempDir()
+		require.NoError(t, os.Symlink(outside, filepath.Join(fetched, "addons")))
+
+		err := Install(source.FetchResult{Dir: fetched}, manifest.AddonSpec{
+			Name: "dlg", SourcePath: "addons/dlg",
+		}, addonsDir)
+		require.Error(t, err)
+		var installErr *output.InstallError
+		require.ErrorAs(t, err, &installErr)
+	})
+}
+
+func TestInstallMaterializesContainedFrameworkSymlinks(t *testing.T) {
 	addonsDir := t.TempDir()
 	fetched := t.TempDir()
-	writeTree(t, fetched, map[string]string{"plugin.cfg": "x"})
-	symlinkPath := filepath.Join(fetched, "link_to_secret")
-	require.NoError(t, os.Symlink("/etc/passwd", symlinkPath))
+	frameworkPath := filepath.Join(fetched, "addons", "SwiftGodot", "bin", "SwiftGodot.framework")
+	writeTree(t, fetched, map[string]string{
+		"addons/SwiftGodot/plugin.cfg":                                         "[plugin]",
+		"addons/SwiftGodot/bin/SwiftGodot.framework/Versions/A/SwiftGodot":     "binary",
+		"addons/SwiftGodot/bin/SwiftGodot.framework/Versions/A/Resources/Info": "plist",
+	})
+	require.NoError(t, os.Symlink("A", filepath.Join(frameworkPath, "Versions", "Current")))
+	require.NoError(t, os.Symlink("Versions/Current/SwiftGodot", filepath.Join(frameworkPath, "SwiftGodot")))
+	require.NoError(t, os.Symlink("Versions/Current/Resources", filepath.Join(frameworkPath, "Resources")))
+	require.NoError(t, os.Symlink("Versions/Current/Headers", filepath.Join(frameworkPath, "Headers")))
 
-	err := Install(source.FetchResult{Dir: fetched}, manifest.AddonSpec{Name: "dlg"}, addonsDir)
-	require.Error(t, err)
-	var installErr *output.InstallError
-	require.ErrorAs(t, err, &installErr)
+	require.NoError(t, Install(source.FetchResult{Dir: fetched}, manifest.AddonSpec{Name: "SwiftGodot"}, addonsDir))
+
+	installedFramework := filepath.Join(addonsDir, "SwiftGodot", "bin", "SwiftGodot.framework")
+	for linkName, wantTarget := range map[string]string{
+		filepath.Join(installedFramework, "Versions", "Current"): "A",
+		filepath.Join(installedFramework, "SwiftGodot"):          "Versions/Current/SwiftGodot",
+		filepath.Join(installedFramework, "Resources"):           "Versions/Current/Resources",
+		filepath.Join(installedFramework, "Headers"):             "Versions/Current/Headers",
+	} {
+		info, err := os.Lstat(linkName)
+		require.NoError(t, err)
+		require.NotZero(t, info.Mode()&os.ModeSymlink)
+		gotTarget, err := os.Readlink(linkName)
+		require.NoError(t, err)
+		require.Equal(t, filepath.FromSlash(wantTarget), gotTarget)
+	}
+	content, err := os.ReadFile(filepath.Join(installedFramework, "SwiftGodot"))
+	require.NoError(t, err)
+	require.Equal(t, "binary", string(content))
 }
 
 func TestInstallRecoversInterruptedBackup(t *testing.T) {

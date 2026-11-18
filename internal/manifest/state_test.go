@@ -38,6 +38,12 @@ func TestStateRoundTripPreservesTheInstalledFileManifest(t *testing.T) {
 			FileManifestVersion: CurrentFileManifestVersion,
 			Files:               []string{"plugin.cfg", "scripts/main.gd"},
 		},
+		"swiftgodot": {
+			ResolvedVersion:     "1.0.0",
+			FileManifestVersion: SymlinkFileManifestVersion,
+			Files:               []string{"SwiftGodot.gdextension", "bin/SwiftGodot.framework/Versions/A/SwiftGodot"},
+			Symlinks:            []string{"bin/SwiftGodot.framework/SwiftGodot", "bin/SwiftGodot.framework/Versions/Current"},
+		},
 	}}
 	path := filepath.Join(t.TempDir(), ".gpm-state.toml")
 	require.NoError(t, state.Save(path))
@@ -45,6 +51,9 @@ func TestStateRoundTripPreservesTheInstalledFileManifest(t *testing.T) {
 	got, err := LoadState(path)
 	require.NoError(t, err)
 	require.Equal(t, state.Addons, got.Addons)
+	require.True(t, got.Addons["dlg"].HasFileManifest())
+	require.True(t, got.Addons["swiftgodot"].HasFileManifest())
+	require.False(t, (StateEntry{}).HasFileManifest())
 }
 
 // TestLoadStateCorruptIsEmptyAndNonFatal pins the one deliberate fail-open in

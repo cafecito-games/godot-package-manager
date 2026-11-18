@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"time"
+
+	"github.com/cafecito-games/godot-package-manager/internal/symlink"
 )
 
 // zipEpoch is the timestamp every archive entry carries: the MS-DOS zip epoch,
@@ -29,6 +31,7 @@ var zipEpoch = time.Date(1980, time.January, 1, 0, 0, 0, 0, time.UTC)
 const (
 	executableArchiveMode os.FileMode = 0o755
 	regularArchiveMode    os.FileMode = 0o644
+	symlinkArchiveMode    os.FileMode = os.ModeSymlink | 0o777
 )
 
 // fileSource is a read handle for one file of the addon subtree: the open addon
@@ -61,6 +64,11 @@ type archiveFile struct {
 
 	// executable records whether the source file had any execute bit set.
 	executable bool
+
+	// isSymlink reports whether this entry is a contained relative symlink, and
+	// linkTarget holds its normalized "/"-separated relative target.
+	isSymlink  bool
+	linkTarget string
 }
 
 // writeArchive writes one reproducible zip archive at path.
@@ -122,8 +130,26 @@ func writeArchive(path string, files []archiveFile) error {
 	return nil
 }
 
-// writeArchiveEntry writes one file's entry with the normalized header.
+// writeArchiveEntry writes one file's or symlink's entry with the normalized header.
 func writeArchiveEntry(writer *zip.Writer, file archiveFile) error {
+	if file.isSymlink {
+		target, err := readSymlinkTarget(file.source, file.linkTarget)
+		if err != nil {
+			return err
+		}
+		header := &zip.FileHeader{Name: file.archivePath, Method: zip.Deflate}
+		header.Modified = zipEpoch
+		header.SetMode(symlinkArchiveMode)
+		entry, err := writer.CreateHeader(header)
+		if err != nil {
+			return installErrorf("adding %s to the archive: %s", file.archivePath, err)
+		}
+		if _, err := entry.Write([]byte(target)); err != nil {
+			return installErrorf("writing %s into the archive: %s", file.archivePath, err)
+		}
+		return nil
+	}
+
 	mode := regularArchiveMode
 	if file.executable {
 		mode = executableArchiveMode
@@ -153,15 +179,47 @@ func writeArchiveEntry(writer *zip.Writer, file archiveFile) error {
 	return nil
 }
 
+func readSymlinkTarget(source fileSource, expectedTarget string) (string, error) {
+	info, err := source.root.Lstat(source.name)
+	if err != nil {
+		return "", installErrorf("reading %s: %s", source.displayPath, err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return "", manifestErrorf("%s is no longer a symlink", source.displayPath)
+	}
+	rawTarget, err := source.root.Readlink(source.name)
+	if err != nil {
+		return "", installErrorf("reading symlink %s: %s", source.displayPath, err)
+	}
+	normalizedTarget, err := symlink.NormalizeFilesystemTarget(rawTarget)
+	if err != nil {
+		return "", manifestErrorf("%s is a symlink with an unsupported target %q: %s", source.displayPath, rawTarget, err)
+	}
+	if normalizedTarget != expectedTarget {
+		return "", manifestErrorf(
+			"symlink %s changed target from %q to %q while packaging",
+			source.displayPath, expectedTarget, normalizedTarget,
+		)
+	}
+	return normalizedTarget, nil
+}
+
 // openRegularFile opens a file of the addon subtree and refuses anything that is
 // not a regular file.
 //
-// The open goes through the addon root's handle, so every component is resolved
-// inside that root: a path cannot reach outside the addon subtree, whether
-// through a symlink the walk saw or one that replaced an entry afterwards. That
-// containment is the guarantee here; the packager reads the author's own working
-// tree as it finds it and does not promise that the tree held still.
+// The open goes through the addon root's handle, after Lstat confirms the entry
+// itself is not a symlink, so neither an entry that was walked as a symlink nor
+// a regular file replaced by a symlink afterwards is read as regular file bytes.
 func openRegularFile(source fileSource) (*os.File, error) {
+	linkInfo, err := source.root.Lstat(source.name)
+	if err != nil {
+		return nil, installErrorf("reading %s: %s", source.displayPath, err)
+	}
+	if !linkInfo.Mode().IsRegular() {
+		return nil, manifestErrorf(
+			"%s is not a regular file; expected a regular file entry", source.displayPath,
+		)
+	}
 	file, err := source.root.Open(source.name)
 	if err != nil {
 		return nil, installErrorf("reading %s: %s", source.displayPath, err)
@@ -174,7 +232,7 @@ func openRegularFile(source fileSource) (*os.File, error) {
 	if !info.Mode().IsRegular() {
 		_ = file.Close()
 		return nil, manifestErrorf(
-			"%s is not a regular file; a slice archive carries regular files only", source.displayPath,
+			"%s is not a regular file; expected a regular file entry", source.displayPath,
 		)
 	}
 	return file, nil
