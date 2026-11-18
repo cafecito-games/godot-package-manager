@@ -509,6 +509,47 @@ func TestSlicedFetchRejectsSymlinkInSliceArchive(t *testing.T) {
 	requireFetchFailure(t, fetchErr, temporaryRoot, output.ExitInstall, "symlink")
 }
 
+func TestSlicedFetchRejectsCrossSliceChainedSymlinkEscape(t *testing.T) {
+	tarWithSymlink := func(name, target string) []byte {
+		var buffer bytes.Buffer
+		gzipWriter := gzip.NewWriter(&buffer)
+		tarWriter := tar.NewWriter(gzipWriter)
+		require.NoError(t, tarWriter.WriteHeader(&tar.Header{
+			Name: name, Typeflag: tar.TypeSymlink, Linkname: target, Mode: 0o777,
+		}))
+		require.NoError(t, tarWriter.Close())
+		require.NoError(t, gzipWriter.Close())
+		return buffer.Bytes()
+	}
+
+	fixture := craftFixture(t, map[string]craftedSlice{
+		"core":  {file: "sliced-1.2.3-core.tar.gz", body: tarWithSymlink("a/b/up", "../..")},
+		"macos": {file: "sliced-1.2.3-macos.tar.gz", body: tarWithSymlink("a/b/escape", "up/../secret")},
+	})
+	withHost(t, macOSHost)
+	_, temporaryRoot, fetchErr := fetchSlicedRelease(t, fixture, manifest.AddonSpec{}, nil)
+	requireFetchFailure(t, fetchErr, temporaryRoot, output.ExitInstall, "symlink")
+}
+
+func TestSlicedFetchRejectsCrossSliceFileThroughSymlinkParent(t *testing.T) {
+	var coreBuffer bytes.Buffer
+	gzipWriter := gzip.NewWriter(&coreBuffer)
+	tarWriter := tar.NewWriter(gzipWriter)
+	require.NoError(t, tarWriter.WriteHeader(&tar.Header{
+		Name: "a/parent", Typeflag: tar.TypeSymlink, Linkname: "..", Mode: 0o777,
+	}))
+	require.NoError(t, tarWriter.Close())
+	require.NoError(t, gzipWriter.Close())
+
+	fixture := craftFixture(t, map[string]craftedSlice{
+		"core":  {file: "sliced-1.2.3-core.tar.gz", body: coreBuffer.Bytes()},
+		"macos": {files: map[string]string{"a/parent/payload.bin": "x"}},
+	})
+	withHost(t, macOSHost)
+	_, temporaryRoot, fetchErr := fetchSlicedRelease(t, fixture, manifest.AddonSpec{}, nil)
+	requireFetchFailure(t, fetchErr, temporaryRoot, output.ExitInstall, "symlink")
+}
+
 // TestSlicedFetchAppliesDownloadCapPerSlice pins that --max-download-size bounds
 // one archive, which is how a sliced addon can ship more bytes in total than any
 // one of its slices is allowed to be.

@@ -63,6 +63,12 @@ locked installs.
 If the archive host requires credentials, include them in the URL format the
 host supports. `gpm` does not manage an archive credential store.
 
+Relative symbolic links inside fetched sources and archives are materialized
+when their targets resolve lexically inside the installed addon root (for
+example, a versioned macOS `.framework`). Symbolic links with absolute targets,
+targets that escape the addon root directly or by chaining, or tar hard-link
+entries are rejected with an install error (exit code 5).
+
 ## Which Sources Can Be Sliced
 
 An addon published as [platform slices](slices.md) is fetched from a

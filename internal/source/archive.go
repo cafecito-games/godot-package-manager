@@ -22,11 +22,14 @@ import (
 	"github.com/cafecito-games/godot-package-manager/internal/manifest"
 	"github.com/cafecito-games/godot-package-manager/internal/output"
 	"github.com/cafecito-games/godot-package-manager/internal/slice"
+	"github.com/cafecito-games/godot-package-manager/internal/symlink"
 )
 
 const (
 	// defaultMaxDownloadBytes caps the size of a downloaded (compressed) payload.
 	defaultMaxDownloadBytes int64 = 512 << 20
+	// maxSymlinkTargetBytes bounds an archive symlink entry's target string.
+	maxSymlinkTargetBytes int64 = 4096
 	// httpTimeout bounds a single HTTP request.
 	httpTimeout = 60 * time.Second
 )
@@ -190,7 +193,11 @@ func downloadToFile(ctx context.Context, client *http.Client, rawURL string, hea
 // its own, which is the single-archive case every unsliced fetch takes.
 // maxExtracted <= 0 uses the package default cap.
 func extractArchive(nameHint, archivePath, dir string, maxExtracted int64) error {
-	return extractArchiveInto(nameHint, archivePath, dir, newExtractGuard(maxExtracted), nil)
+	guard := newExtractGuard(maxExtracted)
+	if err := extractArchiveInto(nameHint, archivePath, dir, guard, nil); err != nil {
+		return err
+	}
+	return guard.finalize(dir)
 }
 
 // extractArchiveInto extracts the archive at archivePath into dir, choosing zip
@@ -231,6 +238,7 @@ type extractGuard struct {
 	files    int
 	bytes    int64
 	maxBytes int64
+	symlinks *symlink.Tree
 	// overBudget builds the error reported when a limit is exceeded. It exists
 	// because the answer depends on what the budget bounds: one archive the
 	// installer is unpacking, or a set of remote archives an index asked the
@@ -244,6 +252,7 @@ func newExtractGuard(maxBytes int64) *extractGuard {
 	}
 	return &extractGuard{
 		maxBytes:   maxBytes,
+		symlinks:   symlink.NewTree(),
 		overBudget: func(err error) error { return &output.InstallError{Err: err} },
 	}
 }
@@ -277,6 +286,27 @@ func (g *extractGuard) addBytes(n int64) error {
 	return nil
 }
 
+func (g *extractGuard) finalize(dir string) error {
+	if err := g.symlinks.Materialize(dir); err != nil {
+		return unsupportedArchiveSymlinkError("", err)
+	}
+	return nil
+}
+
+func unsupportedArchiveSymlinkError(fallbackName string, err error) error {
+	var symlinkErr *symlink.Error
+	if errors.As(err, &symlinkErr) {
+		name := symlinkErr.Path
+		if fallbackName != "" {
+			name = fallbackName
+		}
+		return &output.InstallError{Err: fmt.Errorf(
+			"archive contains an unsupported symlink entry: %s (%s)", name, symlinkErr.Reason)}
+	}
+	return &output.InstallError{Err: fmt.Errorf(
+		"archive contains an unsupported symlink entry: %s (%v)", fallbackName, err)}
+}
+
 // extractDisposition is what a claim callback decides about one archive entry.
 // Its zero value writes the entry, which is what every unclaimed path gets.
 type extractDisposition struct {
@@ -307,11 +337,24 @@ func extractZip(archivePath, dir string, guard *extractGuard, claim claimFunc) e
 		if err != nil {
 			return err
 		}
+		relative, err := relativeExtractedPath(dir, dest)
+		if err != nil {
+			return err
+		}
 		if zipFile.Mode()&os.ModeSymlink != 0 {
-			return &output.InstallError{Err: fmt.Errorf(
-				"archive contains an unsupported symlink entry: %s", zipFile.Name)}
+			target, err := readZipSymlinkTarget(zipFile, guard)
+			if err != nil {
+				return err
+			}
+			if err := stageExtractedSymlink(zipFile.Name, relative, target, dir, dest, guard, claim); err != nil {
+				return err
+			}
+			continue
 		}
 		if zipFile.FileInfo().IsDir() {
+			if err := guard.symlinks.AddDirectory(relative); err != nil {
+				return unsupportedArchiveSymlinkError(relative, err)
+			}
 			if err := os.MkdirAll(dest, 0o755); err != nil {
 				return &output.InstallError{Err: err}
 			}
@@ -329,12 +372,15 @@ func extractZip(archivePath, dir string, guard *extractGuard, claim claimFunc) e
 			if err != nil {
 				return &output.InstallError{Err: err}
 			}
-			err = verifySharedEntry(dest, readCloser, disposition, guard)
+			err = verifySharedEntry(dest, relative, readCloser, disposition, guard)
 			_ = readCloser.Close()
 			if err != nil {
 				return err
 			}
 			continue
+		}
+		if err := guard.symlinks.AddFile(relative); err != nil {
+			return unsupportedArchiveSymlinkError(relative, err)
 		}
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return &output.InstallError{Err: err}
@@ -377,8 +423,15 @@ func extractTarGz(archivePath, dir string, guard *extractGuard, claim claimFunc)
 		if err != nil {
 			return err
 		}
+		relative, err := relativeExtractedPath(dir, dest)
+		if err != nil {
+			return err
+		}
 		switch header.Typeflag {
 		case tar.TypeDir:
+			if err := guard.symlinks.AddDirectory(relative); err != nil {
+				return unsupportedArchiveSymlinkError(relative, err)
+			}
 			if err := os.MkdirAll(dest, 0o755); err != nil {
 				return &output.InstallError{Err: err}
 			}
@@ -391,10 +444,13 @@ func extractTarGz(archivePath, dir string, guard *extractGuard, claim claimFunc)
 				return err
 			}
 			if disposition.shared {
-				if err := verifySharedEntry(dest, tarReader, disposition, guard); err != nil {
+				if err := verifySharedEntry(dest, relative, tarReader, disposition, guard); err != nil {
 					return err
 				}
 				continue
+			}
+			if err := guard.symlinks.AddFile(relative); err != nil {
+				return unsupportedArchiveSymlinkError(relative, err)
 			}
 			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 				return &output.InstallError{Err: err}
@@ -402,11 +458,97 @@ func extractTarGz(archivePath, dir string, guard *extractGuard, claim claimFunc)
 			if err := writeFile(dest, tarReader, os.FileMode(header.Mode), guard); err != nil {
 				return err
 			}
-		case tar.TypeSymlink, tar.TypeLink:
+		case tar.TypeSymlink:
+			if err := guard.addFile(); err != nil {
+				return err
+			}
+			if err := guard.addBytes(int64(len(header.Linkname))); err != nil {
+				return err
+			}
+			if int64(len(header.Linkname)) > maxSymlinkTargetBytes {
+				return unsupportedArchiveSymlinkError(header.Name, fmt.Errorf(
+					"symlink target exceeds %d bytes", maxSymlinkTargetBytes))
+			}
+			if err := stageExtractedSymlink(header.Name, relative, header.Linkname, dir, dest, guard, claim); err != nil {
+				return err
+			}
+		case tar.TypeLink:
 			return &output.InstallError{Err: fmt.Errorf(
-				"archive contains an unsupported symlink entry: %s", header.Name)}
+				"archive contains an unsupported hard link entry: %s", header.Name)}
 		}
 	}
+}
+
+func readZipSymlinkTarget(zipFile *zip.File, guard *extractGuard) (string, error) {
+	if err := guard.addFile(); err != nil {
+		return "", err
+	}
+	readCloser, err := zipFile.Open()
+	if err != nil {
+		return "", &output.InstallError{Err: err}
+	}
+	defer func() { _ = readCloser.Close() }()
+
+	limit := maxSymlinkTargetBytes
+	if remaining := guard.maxBytes - guard.bytes; remaining < limit {
+		limit = remaining
+	}
+	if limit < 0 {
+		limit = 0
+	}
+	targetBytes, err := io.ReadAll(io.LimitReader(readCloser, limit+1))
+	if err != nil {
+		return "", &output.InstallError{Err: err}
+	}
+	if err := guard.addBytes(int64(len(targetBytes))); err != nil {
+		return "", err
+	}
+	if int64(len(targetBytes)) > maxSymlinkTargetBytes {
+		return "", unsupportedArchiveSymlinkError(zipFile.Name, fmt.Errorf(
+			"symlink target exceeds %d bytes", maxSymlinkTargetBytes))
+	}
+	return string(targetBytes), nil
+}
+
+func stageExtractedSymlink(
+	rawName, relative, target, dir, dest string,
+	guard *extractGuard,
+	claim claimFunc,
+) error {
+	if strings.ContainsRune(rawName, '\\') || strings.HasSuffix(rawName, "/") {
+		return unsupportedArchiveSymlinkError(rawName, fmt.Errorf(
+			"symlink entry name must be a relative slash-separated path without trailing '/'"))
+	}
+	if relative == "." {
+		return unsupportedArchiveSymlinkError(rawName, fmt.Errorf(
+			"symlink entry cannot replace the archive root"))
+	}
+	if err := symlink.ValidateRelativeTarget(relative, target); err != nil {
+		return unsupportedArchiveSymlinkError(rawName, err)
+	}
+	disposition, err := claimExtractedPath(claim, dir, dest)
+	if err != nil {
+		return err
+	}
+	if disposition.shared {
+		found, matches := guard.symlinks.SharedSymlinkMatches(relative, target)
+		if !found || !matches {
+			return disposition.mismatch()
+		}
+		return nil
+	}
+	if err := guard.symlinks.AddSymlink(relative, target); err != nil {
+		return unsupportedArchiveSymlinkError(rawName, err)
+	}
+	return nil
+}
+
+func relativeExtractedPath(dir, dest string) (string, error) {
+	relative, err := filepath.Rel(filepath.Clean(dir), dest)
+	if err != nil {
+		return "", &output.InstallError{Err: err}
+	}
+	return filepath.ToSlash(relative), nil
 }
 
 // safeJoin joins base and name, returning an error if the result would escape
@@ -446,18 +588,29 @@ func claimExtractedPath(claim claimFunc, dir, dest string) (extractDisposition, 
 // to decompress, and leaving it uncharged would let one path repeated across
 // slices expand past the cap the project set.
 func verifySharedEntry(
-	dest string,
+	dest, relative string,
 	reader io.Reader,
 	disposition extractDisposition,
 	guard *extractGuard,
 ) error {
+	remaining := guard.maxBytes - guard.bytes
+	if guard.symlinks.HasSymlink(relative) {
+		written, err := io.Copy(io.Discard, io.LimitReader(reader, remaining+1))
+		if err != nil {
+			return &output.InstallError{Err: err}
+		}
+		if err := guard.addBytes(written); err != nil {
+			return err
+		}
+		return disposition.mismatch()
+	}
+
 	existing, err := os.Open(dest)
 	if err != nil {
 		return &output.InstallError{Err: err}
 	}
 	defer func() { _ = existing.Close() }()
 
-	remaining := guard.maxBytes - guard.bytes
 	counted := &countingReader{reader: io.LimitReader(reader, remaining+1)}
 	identical, err := readersMatch(existing, counted)
 	if err != nil {

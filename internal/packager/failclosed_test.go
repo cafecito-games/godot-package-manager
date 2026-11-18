@@ -395,7 +395,7 @@ ios.template_release.arm64 = { "bin/libsupport.a" : "res://Frameworks" }
 			wantText: "not a res:// path",
 		},
 		{
-			name:   "a symlink in the addon subtree",
+			name:   "an absolute symlink in the addon subtree",
 			config: validConfig,
 			files:  minimalFiles(),
 			setup: func(t *testing.T, root string) {
@@ -406,6 +406,36 @@ ios.template_release.arm64 = { "bin/libsupport.a" : "res://Frameworks" }
 			},
 			wantCode: output.ExitManifest,
 			wantText: "alias.gd is a symlink",
+		},
+		{
+			name:   "an escaping relative symlink in the addon subtree",
+			config: validConfig,
+			files:  minimalFiles(),
+			setup: func(t *testing.T, root string) {
+				require.NoError(t, os.Symlink(
+					"../../../outside.gd",
+					filepath.Join(root, "addons", "addon", "alias.gd"),
+				))
+			},
+			wantCode: output.ExitManifest,
+			wantText: "alias.gd is a symlink",
+		},
+		{
+			name:   "a symlinked gdextension file",
+			config: validConfig,
+			files: map[string]string{
+				"addons/addon/plugin.gd":        "extends Node\n",
+				"addons/addon/real.extension":   "[configuration]\nentry_symbol = \"addon_main\"\n",
+				"addons/addon/bin/addon_mac.so": "binary",
+			},
+			setup: func(t *testing.T, root string) {
+				require.NoError(t, os.Symlink(
+					"real.extension",
+					filepath.Join(root, "addons", "addon", "addon.gdextension"),
+				))
+			},
+			wantCode: output.ExitManifest,
+			wantText: "not a regular file",
 		},
 		{
 			name:     "the version cannot be a file name",

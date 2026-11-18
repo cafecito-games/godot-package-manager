@@ -267,7 +267,7 @@ func TestFormat2ArtifactsFlowThroughLockStateAndVerification(t *testing.T) {
 	require.Equal(t, map[string]string{"android": checksumOf('e')}, entry.Artifacts)
 	require.Equal(t, []string{"android"}, artifactClosure(entry, []slice.SliceID{android64}))
 
-	state := stateEntryFor(entry, fetched, []string{"plugin.cfg"})
+	state := stateEntryFor(entry, fetched, []string{"plugin.cfg"}, nil)
 	require.Equal(t, []string{"android"}, state.Artifacts)
 	require.Equal(t, "format2:"+checksumOf('a'), state.Pin)
 	require.NoError(t, verifyChecksum(spec, &manifest.Lockfile{Addons: map[string]manifest.LockEntry{"sliced": entry}}, fetched, true))

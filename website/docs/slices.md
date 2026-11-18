@@ -550,7 +550,10 @@ slice list in text output:
 
 Both archive kinds are reproducible: entries are sorted, timestamps are fixed,
 and file modes are normalized, so two runs over an unchanged tree write
-identical bytes. `gpm package` performs no network access, only ever reads the
+identical bytes. Relative symbolic links whose targets stay within `addon_path`
+(such as the versioned links inside a macOS `.framework`) are preserved as
+symbolic-link archive entries; symbolic links with absolute or escaping targets
+are rejected. `gpm package` performs no network access, only ever reads the
 addon subtree, and writes nothing outside the output directory.
 
 Publishing every slice archive, shared-artifact archive, and the index beside

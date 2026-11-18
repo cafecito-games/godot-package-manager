@@ -204,29 +204,251 @@ func TestArchiveFetchHonorsPerFetcherMaxExtracted(t *testing.T) {
 }
 
 func TestArchiveExtractRejectsSymlinkEntry(t *testing.T) {
-	var buf bytes.Buffer
-	gzipWriter := gzip.NewWriter(&buf)
-	tarWriter := tar.NewWriter(gzipWriter)
-	require.NoError(t, tarWriter.WriteHeader(&tar.Header{
-		Name:     "evil-link",
-		Typeflag: tar.TypeSymlink,
-		Linkname: "/etc/passwd",
-		Mode:     0o777,
-	}))
-	require.NoError(t, tarWriter.Close())
-	require.NoError(t, gzipWriter.Close())
+	cases := map[string]struct {
+		tarEntries []tar.Header
+		zipLinks   []struct {
+			name   string
+			target string
+		}
+		zipFiles map[string]string
+		wantText string
+	}{
+		"absolute target": {
+			tarEntries: []tar.Header{
+				{Name: "evil-link", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd", Mode: 0o777},
+			},
+			zipLinks: []struct{ name, target string }{
+				{name: "evil-link", target: "/etc/passwd"},
+			},
+			wantText: "symlink",
+		},
+		"parent traversal escape": {
+			tarEntries: []tar.Header{
+				{Name: "nested/evil", Typeflag: tar.TypeSymlink, Linkname: "../../passwd", Mode: 0o777},
+			},
+			zipLinks: []struct{ name, target string }{
+				{name: "nested/evil", target: "../../passwd"},
+			},
+			wantText: "symlink",
+		},
+		"chained escape across two individually contained links": {
+			tarEntries: []tar.Header{
+				{Name: "a/b/up", Typeflag: tar.TypeSymlink, Linkname: "../..", Mode: 0o777},
+				{Name: "a/b/escape", Typeflag: tar.TypeSymlink, Linkname: "up/../secret", Mode: 0o777},
+			},
+			zipLinks: []struct{ name, target string }{
+				{name: "a/b/up", target: "../.."},
+				{name: "a/b/escape", target: "up/../secret"},
+			},
+			wantText: "symlink",
+		},
+		"escape via materialized parent link": {
+			tarEntries: []tar.Header{
+				{Name: "a/b/parent", Typeflag: tar.TypeSymlink, Linkname: "../..", Mode: 0o777},
+				{Name: "a/b/parent/escape", Typeflag: tar.TypeSymlink, Linkname: "../secret", Mode: 0o777},
+			},
+			zipLinks: []struct{ name, target string }{
+				{name: "a/b/parent", target: "../.."},
+				{name: "a/b/parent/escape", target: "../secret"},
+			},
+			wantText: "symlink",
+		},
+		"regular file beneath symlinked parent": {
+			tarEntries: []tar.Header{
+				{Name: "a/parent", Typeflag: tar.TypeSymlink, Linkname: "..", Mode: 0o777},
+			},
+			zipLinks: []struct{ name, target string }{
+				{name: "a/parent", target: ".."},
+			},
+			zipFiles: map[string]string{"a/parent/file.txt": "x"},
+			wantText: "symlink",
+		},
+		"hard link entry": {
+			tarEntries: []tar.Header{
+				{Name: "real.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1},
+				{Name: "hard-link", Typeflag: tar.TypeLink, Linkname: "real.txt", Mode: 0o644},
+			},
+			wantText: "hard link",
+		},
+	}
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(buf.Bytes())
-	}))
-	defer srv.Close()
+	for name, testCase := range cases {
+		t.Run(name+"/tar.gz", func(t *testing.T) {
+			var buffer bytes.Buffer
+			gzipWriter := gzip.NewWriter(&buffer)
+			tarWriter := tar.NewWriter(gzipWriter)
+			for _, header := range testCase.tarEntries {
+				headerCopy := header
+				require.NoError(t, tarWriter.WriteHeader(&headerCopy))
+				if headerCopy.Typeflag == tar.TypeReg && headerCopy.Size > 0 {
+					_, err := tarWriter.Write(bytes.Repeat([]byte("x"), int(headerCopy.Size)))
+					require.NoError(t, err)
+				}
+			}
+			for fileName, content := range testCase.zipFiles {
+				require.NoError(t, tarWriter.WriteHeader(&tar.Header{
+					Name: fileName, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(content)),
+				}))
+				_, err := tarWriter.Write([]byte(content))
+				require.NoError(t, err)
+			}
+			require.NoError(t, tarWriter.Close())
+			require.NoError(t, gzipWriter.Close())
 
-	f := &ArchiveFetcher{}
-	_, err := f.Fetch(context.Background(), manifest.AddonSpec{
-		Source: manifest.SourceArchive, URL: srv.URL + "/x.tar.gz",
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.Write(buffer.Bytes())
+			}))
+			defer server.Close()
+
+			fetcher := &ArchiveFetcher{}
+			_, err := fetcher.Fetch(context.Background(), manifest.AddonSpec{
+				Source: manifest.SourceArchive, URL: server.URL + "/x.tar.gz",
+			})
+			require.Error(t, err)
+			var installErr *output.InstallError
+			require.ErrorAs(t, err, &installErr)
+			require.Contains(t, err.Error(), testCase.wantText)
+		})
+
+		if len(testCase.zipLinks) == 0 {
+			continue
+		}
+
+		t.Run(name+"/zip", func(t *testing.T) {
+			var buffer bytes.Buffer
+			zipWriter := zip.NewWriter(&buffer)
+			for _, link := range testCase.zipLinks {
+				header := &zip.FileHeader{Name: link.name, Method: zip.Deflate}
+				header.SetMode(os.ModeSymlink | 0o777)
+				entry, err := zipWriter.CreateHeader(header)
+				require.NoError(t, err)
+				_, err = entry.Write([]byte(link.target))
+				require.NoError(t, err)
+			}
+			for fileName, content := range testCase.zipFiles {
+				entry, err := zipWriter.Create(fileName)
+				require.NoError(t, err)
+				_, err = entry.Write([]byte(content))
+				require.NoError(t, err)
+			}
+			require.NoError(t, zipWriter.Close())
+
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.Write(buffer.Bytes())
+			}))
+			defer server.Close()
+
+			fetcher := &ArchiveFetcher{}
+			_, err := fetcher.Fetch(context.Background(), manifest.AddonSpec{
+				Source: manifest.SourceArchive, URL: server.URL + "/x.zip",
+			})
+			require.Error(t, err)
+			var installErr *output.InstallError
+			require.ErrorAs(t, err, &installErr)
+			require.Contains(t, err.Error(), testCase.wantText)
+		})
+	}
+}
+
+func TestArchiveExtractMaterializesContainedSymlinks(t *testing.T) {
+	links := []struct{ name, target string }{
+		// Deliberately emit links before the target files exist to prove
+		// dangling/out-of-order entries work cleanly.
+		{name: "SwiftGodot.framework/SwiftGodot", target: "Versions/Current/SwiftGodot"},
+		{name: "SwiftGodot.framework/Resources", target: "Versions/Current/Resources"},
+		{name: "SwiftGodot.framework/Headers", target: "Versions/Current/Headers"},
+		{name: "SwiftGodot.framework/Versions/Current", target: "A"},
+	}
+
+	t.Run("zip", func(t *testing.T) {
+		var buffer bytes.Buffer
+		zipWriter := zip.NewWriter(&buffer)
+		for _, link := range links {
+			header := &zip.FileHeader{Name: link.name, Method: zip.Deflate}
+			header.SetMode(os.ModeSymlink | 0o777)
+			entry, err := zipWriter.CreateHeader(header)
+			require.NoError(t, err)
+			_, err = entry.Write([]byte(link.target))
+			require.NoError(t, err)
+		}
+		entry, err := zipWriter.Create("SwiftGodot.framework/Versions/A/SwiftGodot")
+		require.NoError(t, err)
+		_, err = entry.Write([]byte("macho-binary"))
+		require.NoError(t, err)
+		require.NoError(t, zipWriter.Close())
+
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.Write(buffer.Bytes())
+		}))
+		defer server.Close()
+
+		fetcher := &ArchiveFetcher{}
+		result, err := fetcher.Fetch(context.Background(), manifest.AddonSpec{
+			Source: manifest.SourceArchive, URL: server.URL + "/fw.zip",
+		})
+		require.NoError(t, err)
+		defer os.RemoveAll(result.Dir)
+
+		for _, link := range links {
+			linkPath := filepath.Join(result.Dir, filepath.FromSlash(link.name))
+			info, err := os.Lstat(linkPath)
+			require.NoError(t, err)
+			require.NotZero(t, info.Mode()&os.ModeSymlink)
+			gotTarget, err := os.Readlink(linkPath)
+			require.NoError(t, err)
+			require.Equal(t, filepath.FromSlash(link.target), gotTarget)
+		}
+		resolvedContent, err := os.ReadFile(filepath.Join(result.Dir, "SwiftGodot.framework", "SwiftGodot"))
+		require.NoError(t, err)
+		require.Equal(t, "macho-binary", string(resolvedContent))
 	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "symlink")
+
+	t.Run("tar.gz", func(t *testing.T) {
+		var buffer bytes.Buffer
+		gzipWriter := gzip.NewWriter(&buffer)
+		tarWriter := tar.NewWriter(gzipWriter)
+		for _, link := range links {
+			require.NoError(t, tarWriter.WriteHeader(&tar.Header{
+				Name: "./" + link.name, Typeflag: tar.TypeSymlink, Linkname: link.target, Mode: 0o777,
+			}))
+		}
+		require.NoError(t, tarWriter.WriteHeader(&tar.Header{
+			Name: "./", Typeflag: tar.TypeDir, Mode: 0o755,
+		}))
+		binaryBytes := []byte("macho-binary")
+		require.NoError(t, tarWriter.WriteHeader(&tar.Header{
+			Name: "SwiftGodot.framework/Versions/A/SwiftGodot", Typeflag: tar.TypeReg, Mode: 0o755, Size: int64(len(binaryBytes)),
+		}))
+		_, err := tarWriter.Write(binaryBytes)
+		require.NoError(t, err)
+		require.NoError(t, tarWriter.Close())
+		require.NoError(t, gzipWriter.Close())
+
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.Write(buffer.Bytes())
+		}))
+		defer server.Close()
+
+		fetcher := &ArchiveFetcher{}
+		result, err := fetcher.Fetch(context.Background(), manifest.AddonSpec{
+			Source: manifest.SourceArchive, URL: server.URL + "/fw.tar.gz",
+		})
+		require.NoError(t, err)
+		defer os.RemoveAll(result.Dir)
+
+		for _, link := range links {
+			linkPath := filepath.Join(result.Dir, filepath.FromSlash(link.name))
+			info, err := os.Lstat(linkPath)
+			require.NoError(t, err)
+			require.NotZero(t, info.Mode()&os.ModeSymlink)
+			gotTarget, err := os.Readlink(linkPath)
+			require.NoError(t, err)
+			require.Equal(t, filepath.FromSlash(link.target), gotTarget)
+		}
+		resolvedContent, err := os.ReadFile(filepath.Join(result.Dir, "SwiftGodot.framework", "SwiftGodot"))
+		require.NoError(t, err)
+		require.Equal(t, "macho-binary", string(resolvedContent))
+	})
 }
 
 func TestSafeJoinRejectsTraversal(t *testing.T) {
